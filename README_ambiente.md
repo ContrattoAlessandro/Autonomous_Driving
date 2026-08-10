@@ -27,7 +27,12 @@ Preparazione degli split:
 python scripts/convert_atlas.py --raw ../dataset_ATLAS/ATLAS --val-frac 0.1
 ```
 
-Il comando conserva il test nativo e ricava validation dal train. I file
+Il comando conserva senza modifiche il test nativo e ricava validation dal solo
+train. In accordo con il paper ATLAS, che campiona le annotazioni a bassa
+frequenza per evitare frame quasi identici, la validation viene selezionata per
+blocchi temporali condivisi tra le camere; un blocco di guardia ai bordi viene
+escluso da entrambi gli split. Prima dello split vengono rimossi i duplicati
+byte-per-byte e viene verificata la disgiunzione SHA-256 tra train e test. I file
 `datasets/yolo/atlas/{train,val,test}.txt` contengono percorsi assoluti per
 evitare errori di working directory.
 

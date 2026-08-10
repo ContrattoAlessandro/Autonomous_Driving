@@ -21,7 +21,7 @@ python scripts/convert_dtld.py   --raw datasets/raw/dtld
 python scripts/convert_bosch.py  --raw datasets/raw/bosch
 python scripts/convert_lisa.py   --raw datasets/raw/lisa
 python scripts/convert_oi.py     --max-images 6000
-# ATLAS is already YOLO; this validates native IDs and creates a separate val split
+# ATLAS is already YOLO; preserve native test and build a temporal, deduplicated val split
 python scripts/convert_atlas.py  --raw ../dataset_ATLAS/ATLAS --val-frac 0.1
 ```
 Each writes `datasets/yolo/<source>/{tierA,tierB,tierC}/labels/<split>/*.txt` +

@@ -8,7 +8,7 @@
 
 path: ./datasets/yolo/atlas
 train: train.txt
-val: val.txt        # carved from native train by convert_atlas.py
+val: val.txt        # temporal/guarded subset of native train from convert_atlas.py
 test: test.txt
 
 nc: 25
