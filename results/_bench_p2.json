@@ -1,0 +1,28 @@
+[
+  {
+    "variant": "yolo26n-p2",
+    "batch": -1,
+    "epoch_time_s": 9.05902,
+    "sec_per_img": 0.18118040000000002,
+    "params_M": 2.515976
+  },
+  {
+    "variant": "yolo26s-p2",
+    "batch": -1,
+    "epoch_time_s": 8.74192,
+    "sec_per_img": 0.1748384,
+    "params_M": 9.663464
+  },
+  {
+    "variant": "yolo26m-p2",
+    "error": "Caught AcceleratorError in pin memory thread for device 0.\nOriginal Traceback (most recent call last):\n  File \"C:\\Users\\alexa\\AppData\\Roaming\\Python\\Python312\\site-packages\\torch\\utils\\data\\_utils\\pin_memory.py\", line 34, in do_one_step\n    data = pin_memory(data, device)\n           ^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Users\\alexa\\AppData\\Roaming\\Python\\Python312\\site-packages\\torch\\utils\\data\\_utils\\pin_memory.py\", line 73, in pin_memory\n    {k: pin_memory(sample, device) for k, sample in data.items()}\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Users\\alexa\\AppData\\Roaming\\Python\\Python312\\site-packages\\torch\\utils\\data\\_utils\\pin_memory.py\", line 57, in pin_memory\n    return data.pin_memory()\n           ^^^^^^^^^^^^^^^^^\ntorch.AcceleratorError: CUDA error: out of memory\nSearch for `cudaErrorMemoryAllocation' in https://docs.nvidia.com/cuda/cuda-runtime-api/group__CUDART__TYPES.html for more information.\nCUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.\nFor debugging consider passing CUDA_LAUNCH_BLOCKING=1\nCompile with `TORCH_USE_CUDA_DSA` to enable device-side assertions.\n\n"
+  },
+  {
+    "variant": "yolo26l-p2",
+    "error": "Caught AcceleratorError in pin memory thread for device 0.\nOriginal Traceback (most recent call last):\n  File \"C:\\Users\\alexa\\AppData\\Roaming\\Python\\Python312\\site-packages\\torch\\utils\\data\\_utils\\pin_memory.py\", line 34, in do_one_step\n    data = pin_memory(data, device)\n           ^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Users\\alexa\\AppData\\Roaming\\Python\\Python312\\site-packages\\torch\\utils\\data\\_utils\\pin_memory.py\", line 73, in pin_memory\n    {k: pin_memory(sample, device) for k, sample in data.items()}\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Users\\alexa\\AppData\\Roaming\\Python\\Python312\\site-packages\\torch\\utils\\data\\_utils\\pin_memory.py\", line 57, in pin_memory\n    return data.pin_memory()\n           ^^^^^^^^^^^^^^^^^\ntorch.AcceleratorError: CUDA error: out of memory\nSearch for `cudaErrorMemoryAllocation' in https://docs.nvidia.com/cuda/cuda-runtime-api/group__CUDART__TYPES.html for more information.\nCUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.\nFor debugging consider passing CUDA_LAUNCH_BLOCKING=1\nCompile with `TORCH_USE_CUDA_DSA` to enable device-side assertions.\n\n"
+  },
+  {
+    "variant": "yolo26x-p2",
+    "error": "Caught AcceleratorError in pin memory thread for device 0.\nOriginal Traceback (most recent call last):\n  File \"C:\\Users\\alexa\\AppData\\Roaming\\Python\\Python312\\site-packages\\torch\\utils\\data\\_utils\\pin_memory.py\", line 34, in do_one_step\n    data = pin_memory(data, device)\n           ^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Users\\alexa\\AppData\\Roaming\\Python\\Python312\\site-packages\\torch\\utils\\data\\_utils\\pin_memory.py\", line 73, in pin_memory\n    {k: pin_memory(sample, device) for k, sample in data.items()}\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Users\\alexa\\AppData\\Roaming\\Python\\Python312\\site-packages\\torch\\utils\\data\\_utils\\pin_memory.py\", line 57, in pin_memory\n    return data.pin_memory()\n           ^^^^^^^^^^^^^^^^^\ntorch.AcceleratorError: CUDA error: out of memory\nSearch for `cudaErrorMemoryAllocation' in https://docs.nvidia.com/cuda/cuda-runtime-api/group__CUDART__TYPES.html for more information.\nCUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.\nFor debugging consider passing CUDA_LAUNCH_BLOCKING=1\nCompile with `TORCH_USE_CUDA_DSA` to enable device-side assertions.\n\n"
+  }
+]

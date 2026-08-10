@@ -1,0 +1,26 @@
+# YOLOv8 native-ATLAS traffic-light detection — Python dependencies
+# Tested with Python 3.12 on Windows + RTX 5070 (CUDA 13.2).
+
+# Core training/inference framework.  The project uses the official YOLOv8
+# trainer and COCO-pretrained yolov8*.pt weights; no custom P2 code is needed.
+ultralytics>=8.4.116
+
+# Open Images V7 download + dataset inspection/visualization.
+fiftyone>=1.0.0
+
+# SAHI sliced inference for the small-object recall upper bound at eval time.
+sahi>=0.11.0
+
+# Hyperparameter search (model.tune uses Ray Tune under the hood).
+ray[tune]>=2.10.0
+
+# Data wrangling / plotting.
+pandas>=2.0
+pyyaml>=6.0
+matplotlib>=3.7
+seaborn>=0.13
+tqdm>=4.66
+
+# Optional: ONNX export validation (ultralytics calls onnx internally).
+onnx>=1.16
+onnxruntime>=1.18

@@ -1,0 +1,27 @@
+# Datasets (large, regenerable from scripts/convert_*.py)
+datasets/raw/
+datasets/yolo/
+
+# Ultralytics outputs (weights, logs, plots)
+runs/
+*.pt
+
+# Local benchmark fixtures and generated inspection montages
+_bench/
+_probe.jpg
+results/inspect/
+results/**/*.png
+results/**/*.jpg
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Keep results/ tracked (small CSV/JSON tables) but ignore bulky plots if needed:
+# results/eda/*.png

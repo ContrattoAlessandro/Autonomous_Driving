@@ -1,0 +1,39 @@
+{
+  "fitness": 0.0,
+  "box.map50": 0.0,
+  "box.map": 0.0,
+  "box.mp": 0.0,
+  "box.mr": 0.0,
+  "per_class": {
+    "circle_green": {
+      "ap50": 0.0,
+      "ap": 0.0,
+      "p": 0.0,
+      "r": 0.0
+    },
+    "circle_red": {
+      "ap50": 0.0,
+      "ap": 0.0,
+      "p": 0.0,
+      "r": 0.0
+    },
+    "circle_red_yellow": {
+      "ap50": 0.0,
+      "ap": 0.0,
+      "p": 0.0,
+      "r": 0.0
+    },
+    "arrow_straight_red": {
+      "ap50": 0.0,
+      "ap": 0.0,
+      "p": 0.0,
+      "r": 0.0
+    },
+    "arrow_straight_green": {
+      "ap50": 0.0,
+      "ap": 0.0,
+      "p": 0.0,
+      "r": 0.0
+    }
+  }
+}

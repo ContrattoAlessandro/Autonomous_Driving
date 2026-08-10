@@ -1,0 +1,55 @@
+# Official-style Ultralytics YOLOv8 baseline for native ATLAS detection.
+#
+# The trainer, loss and augmentation implementations remain those provided by
+# Ultralytics.  These are conservative overrides for tiny traffic lights and
+# for ATLAS' native pictogram-state taxonomy (25 classes).
+
+# Optimizer / schedule (Ultralytics YOLOv8 defaults unless noted)
+optimizer: auto
+lr0: 0.01
+lrf: 0.01
+momentum: 0.937
+weight_decay: 0.0005
+warmup_epochs: 3.0
+warmup_momentum: 0.8
+warmup_bias_lr: 0.1
+cos_lr: true
+
+# YOLOv8 detection loss defaults
+box: 7.5
+cls: 0.5
+dfl: 1.5
+
+# Resolution / runtime
+epochs: 300
+imgsz: 1280
+amp: true
+rect: false
+cache: false
+workers: 4
+patience: 60
+save_period: 10
+
+# Augmentation.  Mosaic/scale stay within the official API, while mixup and
+# copy-paste are disabled because blending or copying colored pictogram boxes
+# can change the state semantics and copy-paste requires segmentation masks.
+mosaic: 0.5
+close_mosaic: 15
+mixup: 0.0
+copy_paste: 0.0
+hsv_h: 0.015
+hsv_s: 0.4
+hsv_v: 0.3
+degrees: 0.0
+translate: 0.1
+scale: 0.5
+shear: 0.0
+perspective: 0.0
+flipud: 0.0
+# ATLAS contains left/right arrow classes: a horizontal flip without a
+# corresponding class remap would silently corrupt labels.
+fliplr: 0.0
+
+# Reproducibility
+seed: 42
+deterministic: true

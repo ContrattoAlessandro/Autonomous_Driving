@@ -1,0 +1,31 @@
+path: ./datasets/yolo/atlas_smoke
+train: train.txt
+val: val.txt
+test: test.txt
+nc: 25
+names:
+  0: circle_green
+  1: circle_red
+  2: "off"
+  3: circle_red_yellow
+  4: arrow_left_green
+  5: circle_yellow
+  6: arrow_right_red
+  7: arrow_left_red
+  8: arrow_straight_red
+  9: arrow_left_red_yellow
+  10: arrow_left_yellow
+  11: arrow_straight_yellow
+  12: arrow_right_red_yellow
+  13: arrow_right_green
+  14: arrow_right_yellow
+  15: arrow_straight_green
+  16: arrow_straight_left_green
+  17: arrow_straight_red_yellow
+  18: arrow_straight_left_red
+  19: arrow_straight_left_yellow
+  20: arrow_straight_left_red_yellow
+  21: arrow_straight_right_red
+  22: arrow_straight_right_red_yellow
+  23: arrow_straight_right_yellow
+  24: arrow_straight_right_green

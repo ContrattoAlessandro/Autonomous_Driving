@@ -1,0 +1,57 @@
+[
+  {
+    "variant": "yolo26n-p2",
+    "batch": 16,
+    "imgsz": 1024,
+    "status": "ok",
+    "ms_per_iter": 254.0,
+    "ms_per_image": 15.88,
+    "img_per_sec": 63.0,
+    "vram_peak_gb": 9.58,
+    "params_M": 2.5
+  },
+  {
+    "variant": "yolo26s-p2",
+    "batch": 8,
+    "imgsz": 1024,
+    "status": "ok",
+    "ms_per_iter": 211.5,
+    "ms_per_image": 26.44,
+    "img_per_sec": 37.8,
+    "vram_peak_gb": 9.09,
+    "params_M": 9.7
+  },
+  {
+    "variant": "yolo26m-p2",
+    "batch": 4,
+    "imgsz": 1024,
+    "status": "ok",
+    "ms_per_iter": 201.3,
+    "ms_per_image": 50.33,
+    "img_per_sec": 19.9,
+    "vram_peak_gb": 9.05,
+    "params_M": 21.1
+  },
+  {
+    "variant": "yolo26l-p2",
+    "batch": 4,
+    "imgsz": 1024,
+    "status": "ok",
+    "ms_per_iter": 248.3,
+    "ms_per_image": 62.09,
+    "img_per_sec": 16.1,
+    "vram_peak_gb": 11.27,
+    "params_M": 25.7
+  },
+  {
+    "variant": "yolo26x-p2",
+    "batch": 2,
+    "imgsz": 1024,
+    "status": "ok",
+    "ms_per_iter": 211.6,
+    "ms_per_image": 105.81,
+    "img_per_sec": 9.5,
+    "vram_peak_gb": 9.17,
+    "params_M": 57.8
+  }
+]

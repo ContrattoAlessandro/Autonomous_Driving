@@ -1,0 +1,5 @@
+[done] yolo26n-p2     batch=8  params=   2.5M    213.5 ms/iter  ( 26.69 ms/img,   37.5 img/s)  n=7
+[done] yolo26s-p2     batch=4  params=   9.7M    184.7 ms/iter  ( 46.17 ms/img,   21.7 img/s)  n=17
+[done] yolo26m-p2     batch=4  params=  21.1M   2455.3 ms/iter  (613.83 ms/img,    1.6 img/s)  n=17
+[done] yolo26l-p2     batch=2  params=  25.7M    202.6 ms/iter  (101.31 ms/img,    9.9 img/s)  n=37
+[done] yolo26x-p2     batch=2  params=  57.8M   2938.9 ms/iter  (1469.47 ms/img,    0.7 img/s)  n=37

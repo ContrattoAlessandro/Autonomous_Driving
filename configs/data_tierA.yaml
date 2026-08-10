@@ -1,0 +1,17 @@
+# Tier A — detection-only (single class "traffic_light").
+# Uses ALL FOUR datasets including Open Images V7 (which has no state labels).
+# Purpose: a sanity baseline + a strong box prior before fine-tuning for state.
+#
+# Train/val/test are the UNION of each source's split, assembled by
+# scripts/harmonize_labels.py (which writes the actual *.txt list files).
+#
+# Usage:  yolo train data=configs/data_tierA.yaml ...
+
+path: ./datasets/yolo/tierA     # root (relative to tl_detection/)
+train: train.txt
+val: val.txt
+test: test.txt
+
+nc: 1
+names:
+  0: traffic_light

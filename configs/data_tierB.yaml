@@ -1,0 +1,26 @@
+# Tier B — STATE model (PRIMARY DELIVERABLE).
+# Uses the three state-rich datasets: DTLD + Bosch STL + LISA.
+# Open Images is EXCLUDED (it has no state labels).
+#
+# Unified 6-class taxonomy (see docs/datasets.md for the per-source mapping table):
+#   0 red          1 yellow          2 green
+#   3 red_yellow   4 off             5 unknown
+#
+# The mapping from each source's native labels is encoded in
+# scripts/harmonize_labels.py (LISA: go->green, stop->red, warning->yellow;
+# Bosch: off->off, green/red/yellow->same; DTLD: full state + pictogram collapsed
+# to its base color, e.g. green_arrow_left -> green for Tier B).
+
+path: ./datasets/yolo/tierB
+train: train.txt
+val: val.txt
+test: test.txt
+
+nc: 6
+names:
+  0: red
+  1: yellow
+  2: green
+  3: red_yellow
+  4: "off"
+  5: unknown

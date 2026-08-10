@@ -1,0 +1,23 @@
+[
+  {
+    "variant": "yolo26m-p2",
+    "batch": 4,
+    "epoch_time_min": 33.2163,
+    "sec_per_img": 39.859559999999995,
+    "params_M": 21.06276
+  },
+  {
+    "variant": "yolo26l-p2",
+    "batch": 2,
+    "epoch_time_min": 8.03297,
+    "sec_per_img": 9.639564,
+    "params_M": 25.733992
+  },
+  {
+    "variant": "yolo26x-p2",
+    "batch": 2,
+    "epoch_time_min": 69.3117,
+    "sec_per_img": 83.17404,
+    "params_M": 57.813256
+  }
+]
