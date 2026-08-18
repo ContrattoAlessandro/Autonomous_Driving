@@ -1,0 +1,84 @@
+{
+  "warmstart": {
+    "weights": "C:\\Users\\alexa\\Desktop\\Tesi_Autonomous_Driving\\tl_detection\\yolo11l.pt",
+    "loaded_state_items": 1009,
+    "loaded_parameters": 25310480,
+    "target_parameters": 25311251,
+    "loaded_fraction": 0.9999695392377089,
+    "loaded_state_items_by_region": {
+      "backbone": 498,
+      "neck_p3_p5": 396,
+      "detect_p3_p5": 115
+    },
+    "pyramid_levels": [
+      "P3",
+      "P4",
+      "P5"
+    ],
+    "p2_enabled": false,
+    "one_class_output_initialized_randomly": true,
+    "trainer_reuses_in_memory_weights": true,
+    "mapping_examples": {
+      "model.0.conv.weight": "model.0.conv.weight",
+      "model.0.bn.weight": "model.0.bn.weight",
+      "model.0.bn.bias": "model.0.bn.bias",
+      "model.0.bn.running_mean": "model.0.bn.running_mean",
+      "model.0.bn.running_var": "model.0.bn.running_var",
+      "model.0.bn.num_batches_tracked": "model.0.bn.num_batches_tracked",
+      "model.1.conv.weight": "model.1.conv.weight",
+      "model.1.bn.weight": "model.1.bn.weight",
+      "model.1.bn.bias": "model.1.bn.bias",
+      "model.1.bn.running_mean": "model.1.bn.running_mean",
+      "model.1.bn.running_var": "model.1.bn.running_var",
+      "model.1.bn.num_batches_tracked": "model.1.bn.num_batches_tracked"
+    }
+  },
+  "forward": {
+    "schema": "TLR-YOLO-MTL Milestone 4 arrow smoke v1",
+    "input_shape": [
+      1,
+      3,
+      800,
+      1600
+    ],
+    "dtype": "float16",
+    "levels": [
+      "P3",
+      "P4",
+      "P5"
+    ],
+    "p2_enabled": false,
+    "arrow_detection_shape": [
+      1,
+      5,
+      26250
+    ],
+    "arrow_direction_shape": [
+      1,
+      3,
+      26250
+    ],
+    "direction_classes": [
+      "left",
+      "straight",
+      "right"
+    ],
+    "direction_activation": "independent_sigmoid",
+    "arrow_parameters": 1429724,
+    "total_parameters": 26779399,
+    "peak_memory_bytes": 248926208
+  },
+  "task_aligned_assignment": {
+    "compound_target": [
+      1,
+      1,
+      0
+    ],
+    "positive_direction_matches": 10,
+    "arrow_detection_gradient_sum": 4532.649043467827,
+    "arrow_direction_gradient_sum": 39.491808354854584,
+    "fully_masked_valid_images": 0,
+    "fully_masked_arrow_gradient_sum": 0.0,
+    "arrow_masking_ok": true
+  }
+}

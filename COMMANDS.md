@@ -1,89 +1,170 @@
-# Quick reference — common commands
+# Comandi riproducibili
 
-All commands run from `tl_detection/`. Assumes a venv with `pip install -r requirements.txt`.
+Eseguire i comandi da `tl_detection/`. La metodologia canonica è in
+`docs/metodologia_pipeline_attuale.md`.
 
-## 0. Setup
-```bash
-python -m venv .venv && source .venv/Scripts/activate
+## 1. Ambiente
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-python scripts/check_env.py            # verify ultralytics + GPU + YOLOv8 config + weights
 ```
 
-## 1. Download + convert datasets
-Datasets go under `datasets/raw/<source>/`:
-- **DTLD**: https://www.traffic-light-data.com/  → `datasets/raw/dtld/`
-- **Bosch STL**: https://hci.iwr.uni-heidelberg.de/node/6132  → `datasets/raw/bosch/`
-- **LISA TL**: http://cvrr.ucsd.edu/LISA/lisa-traffic-light-dataset.html  → `datasets/raw/lisa/`
-- **Open Images V7**: fetched automatically by fiftyone (no manual download).
+L'ambiente validato usa Python 3.12, PyTorch CUDA, Ultralytics, una RTX 5070 da
+12 GB e ONNX opset 17.
 
-```bash
-python scripts/convert_dtld.py   --raw datasets/raw/dtld
-python scripts/convert_bosch.py  --raw datasets/raw/bosch
-python scripts/convert_lisa.py   --raw datasets/raw/lisa
-python scripts/convert_oi.py     --max-images 6000
-# ATLAS is already YOLO; preserve native test and build a temporal, deduplicated val split
-python scripts/convert_atlas.py  --raw ../dataset_ATLAS/ATLAS --val-frac 0.1
-```
-Each writes `datasets/yolo/<source>/{tierA,tierB,tierC}/labels/<split>/*.txt` +
-`datasets/yolo/<source>/images/<split>/*.<ext>`. `--dry-run` scans only.
+## 2. Preparazione DTLD paired
 
-## 2. Harmonize splits + EDA
-```bash
-python scripts/harmonize_labels.py            # builds tierA/B/C train.txt/val.txt/test.txt
-python scripts/eda.py --tier all               # class + bbox-size histograms, % small objects
-```
-The EDA headline number (`% objects < 32 px`) justifies the high input resolution.
+I JPEG puliti esistenti sono in `../DTLD_jpg_plain`. Rigenerarli soltanto in
+una nuova directory vuota; lo script rifiuta destinazioni non vuote e non
+disegna annotazioni nei pixel.
 
-## 3. Train
-```bash
-# primary: native ATLAS 25-class model, official YOLOv8 nano without P2
-python scripts/train.py --data atlas --init coco --model yolov8n.yaml --imgsz 1280 --epochs 300 --batch 8
-
-# larger official YOLOv8 baseline, if VRAM permits
-python scripts/train.py --data atlas --init coco --model yolov8s.yaml --imgsz 1280 --epochs 300 --batch 2
-
-# short smoke/test run: change the epoch count from the command
-python scripts/train.py --data atlas --init coco --model yolov8n.yaml --imgsz 1280 --epochs 10 --batch 8
-
-# alternative project tiers (their native project taxonomy is unchanged)
-python scripts/train.py --tier B --init coco
-
-# Tier-A detection baseline (all 4 datasets)
-python scripts/train.py --tier A --init coco
-```
-Outputs → `runs/<model-stem>_<dataset>_<init>/` (weights in `weights/best.pt`).
-The mainline rejects P2 model names and uses official YOLOv8 COCO weights matched
-to the selected scale. Verify a scale with `python scripts/check_env.py --scale n`.
-
-> **Windows pagefile**: if you hit `WinError 1455` ("file di paging troppo
-> piccolo"), enlarge the Windows pagefile and/or lower `--workers`. See
-> `docs/fix_winerror1455.md`.
-
-## 4. Hyperparameter search (optional, before the final run)
-```bash
-python scripts/tune.py --data atlas --init coco --iters 30 --epochs 40 --imgsz 960
-cp runs/tune/yolov8_data_atlas_coco/best_hyperparameters.yaml configs/hyp_tuned.yaml
-python scripts/train.py --data atlas --init coco --hyp configs/hyp_tuned.yaml
+```powershell
+.\.venv\Scripts\python.exe -B -m scripts.prepare_dtld_images `
+  --data-path ..\DTLD `
+  --label-path ..\DTLD\v2.0 `
+  --target-path ..\DTLD_jpg_plain_new
 ```
 
-## 5. Evaluate
-```bash
-python scripts/eval.py --weights runs/yolov8n_atlas_coco/weights/best.pt \
-       --data atlas --size --speed --onnx
-```
-Writes `results/eval/<run>/{ultralytics_metrics,size_stratified,speed}.json`.
+Rigenerazione del manifest canonico, degli split e del QA:
 
-## 6. Build thesis tables
-```bash
-python scripts/make_tables.py                # all runs under results/eval/
-python scripts/make_tables.py --runs yolov8n_atlas_coco
+```powershell
+.\.venv\Scripts\python.exe -B -m tlr_yolo_mtl prepare `
+  --output datasets\tlr_mtl_dtld_paired --skip-overlays
 ```
-Writes LaTeX `.tex` + PNG plots to `results/tables/`.
 
-## Memory note
-RTX 5070 = 12 GB. Choose the batch explicitly with `--batch N`; use
-`--batch -1` only when you want Ultralytics auto-batch. If you hit CUDA OOM,
-lower `--batch` or `--imgsz`.
-If you hit `WinError 1455` (pagefile too small — a Windows memory
-issue, NOT OOM and NOT a data/labels problem), enlarge the pagefile and/or lower
-`--workers`. See `docs/fix_winerror1455.md`.
+Output atteso:
+
+```text
+datasets/tlr_mtl_dtld_paired/
+├── manifest.json
+├── records.jsonl
+├── splits.json
+└── qa_report.json
+```
+
+Il manifest può continuare a contenere i 117.038 record DTLD/ATLAS/LISA. Il
+trainer filtra però soltanto i 22.563 DTLD train paired; ATLAS e LISA sono
+riservati a valutazioni esterne.
+
+QA aggiuntivo con hash o overlay:
+
+```powershell
+.\.venv\Scripts\python.exe -B -m tlr_yolo_mtl qa `
+  --input datasets\tlr_mtl_dtld_paired\records.jsonl `
+  --output datasets\tlr_mtl_dtld_paired\qa_hash_report.json `
+  --hash-images
+
+.\.venv\Scripts\python.exe -B -m tlr_yolo_mtl qa `
+  --input datasets\tlr_mtl_dtld_paired\records.jsonl `
+  --output datasets\tlr_mtl_dtld_paired\qa_overlay_report.json `
+  --overlays datasets\tlr_mtl_dtld_paired\overlays `
+  --overlay-fraction 0.01
+```
+
+## 3. Verifiche del modello
+
+```powershell
+.\.venv\Scripts\python.exe -B -m scripts.check_tlr_yolo_mtl_model
+.\.venv\Scripts\python.exe -B -m scripts.check_tlr_yolo_mtl_unified
+.\.venv\Scripts\python.exe -B -m scripts.check_tlr_yolo_mtl_training
+```
+
+I vecchi check `attributes/arrows/relevance/context` appartengono alla
+pipeline storica con doppio detector e FiLM e non descrivono la mainline.
+
+Prima del training finale sul corpus paired eseguire almeno training smoke e
+probe di memoria alla risoluzione finale:
+
+```powershell
+.\.venv\Scripts\python.exe -B -m scripts.check_tlr_yolo_mtl_training_memory `
+  --batch 4 `
+  --output results\tlr_yolo_mtl\paired_memory_probe_batch4.json
+```
+
+## 4. Training TLR-YOLO-MTL
+
+Prova di un optimizer step:
+
+```powershell
+.\.venv\Scripts\python.exe -B -m scripts.train_tlr_yolo_mtl `
+  --config configs\tlr_yolo_mtl_train.yaml --batch 4 `
+  --phase perception_and_local_relevance --max-optimizer-steps 1 `
+  --output-dir runs\tlr_yolo_mtl_unified_dtld_trial
+```
+
+Training completo:
+
+```powershell
+.\.venv\Scripts\python.exe -B -m scripts.train_tlr_yolo_mtl `
+  --config configs\tlr_yolo_mtl_train.yaml --batch 4 `
+  --steps-per-epoch 100 `
+  --output-dir runs\tlr_yolo_mtl_unified_dtld_seed42
+```
+
+Con batch fisico 4 il trainer usa otto passi di accumulo per mantenere il batch
+effettivo 32. Ogni finestra contiene 32 immagini DTLD paired.
+
+Ripresa dall'ultima epoca completa:
+
+```powershell
+.\.venv\Scripts\python.exe -B -m scripts.train_tlr_yolo_mtl `
+  --resume runs\tlr_yolo_mtl_unified_dtld_seed42\weights\last.pt
+```
+
+Non usare `--resume` con checkpoint FiLM/doppio-detector: il trainer richiede
+lo schema unified-attention v3.
+
+## 5. Valutazione e calibrazione
+
+Le primitive di matching, metriche, score di selezione e temperature scaling
+sono in `tlr_yolo_mtl/evaluation/`. La pipeline end-to-end di inferenza su
+validation e test deve essere completata prima della selezione di `best.pt`.
+Il test non deve essere usato per scegliere checkpoint, soglie o temperature.
+
+Il confronto minimo è:
+
+1. detector separati + relevance locale, baseline storica;
+2. detector unificato + relevance locale;
+3. FiLM storico;
+4. cross-attention con stop-gradient;
+5. cross-attention jointly trained;
+6. ego-lane bias soltanto dopo avere annotato `is_ego_lane`.
+
+## 6. Export e deployment
+
+Verifica architetturale corrente:
+
+```powershell
+.\.venv\Scripts\python.exe -B -m scripts.check_tlr_yolo_mtl_deployment
+```
+
+L'ONNX espone 11 output, inclusi set padded, relevance e attention. Quello
+prodotto da questo controllo usa il warm-start COCO e teste non
+addestrate. Dopo la selezione finale deve essere rigenerato da `best.pt`, poi
+validato in ONNX Runtime/TensorRT e profilato end-to-end.
+
+## 7. Test automatici
+
+```powershell
+.\.venv\Scripts\python.exe -B -m unittest discover -s tests
+```
+
+## 8. Baseline storiche ATLAS
+
+La pipeline YOLOv8/YOLO26 nativa ATLAS è conservata per confronti di detection,
+ma non è la mainline multi-task. Comando principale:
+
+```powershell
+python scripts/train.py --data atlas --init coco --model yolov8n.yaml `
+  --imgsz 1280 --epochs 300 --batch 8
+```
+
+Per dettagli e ablazione P2 vedere `README_ambiente.md`.
+
+## Nota memoria Windows
+
+`WinError 1455` indica un pagefile Windows insufficiente, non un CUDA OOM e non
+un errore nelle label. Ridurre `--workers` o aumentare il pagefile; vedere
+`docs/fix_winerror1455.md`.

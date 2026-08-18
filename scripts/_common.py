@@ -11,8 +11,8 @@ Key design choices:
   * Labels are written as a DICT per image and finalized with write_yolo_label(),
     so converters can be tolerant of missing/odd native fields.
   * A small normalization layer (bbox_to_yolo, pick) lets each converter be
-    defensive about exact field names, which vary across DTLD v1/v2,
-    Bosch README vs shipped YAML, and LISA clip variants.
+    defensive about exact field names, which vary across DTLD v1/v2 and
+    LISA clip variants.
   * The convert_*() entry points are CLI-callable and idempotent (re-running
     overwrites outputs).
 """
@@ -65,7 +65,7 @@ class ConvertStats:
 
 def pick(d: dict, *keys: str, default: Any = None) -> Any:
     """Return the first present value among `keys` in dict `d` (case-insensitive
-    on the key name). Handles schema drift between DTLD v1/v2, Bosch variants."""
+    on the key name). Handles schema drift between DTLD v1/v2 variants."""
     lower = {k.lower(): v for k, v in d.items()}
     for k in keys:
         if k.lower() in lower:

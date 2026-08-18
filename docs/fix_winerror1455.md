@@ -58,8 +58,9 @@ Get-CimInstance Win32_PageFileUsage | Select-Object Name, AllocatedBaseSize, Cur
 Oltre al pagefile, il repo ora riduce il rischio di ribattere nell'errore:
 
 1. **`hyp_base.yaml`: `workers: 4`** (era 8). Ogni worker in meno = una cuBLAS in meno da caricare via spawn. Abbassa ulteriormente con `--workers 2` se il problema persiste.
-2. **`train.py`: il modello e la scala sono espliciti.** La configurazione
-   principale usa YOLOv8 senza P2 e stampa modello, input, batch e workers
-   all'avvio.
-3. **Usa il batch automatico ufficiale** (`batch=-1`) per YOLOv8n a 1280; se
+2. **Baseline `train.py`: il modello e la scala sono espliciti.** La baseline
+   ATLAS usa YOLOv8/YOLO26 senza P2 e stampa modello, input, batch e workers
+   all'avvio. La mainline TLR-YOLO-MTL usa invece
+   `configs/tlr_yolo_mtl_train.yaml`, con `workers=2` e `prefetch_factor=1`.
+3. **Per la baseline usa il batch automatico ufficiale** (`batch=-1`) per YOLOv8n a 1280; se
    compare CUDA OOM, passa un batch esplicito più piccolo o riduci `--imgsz`.

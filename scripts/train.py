@@ -1,14 +1,15 @@
-"""Train an official Ultralytics YOLOv8 detector on the project datasets.
+"""Train an official Ultralytics YOLO detector on the project datasets.
 
-The mainline experiment is YOLOv8 without a P2 head.  The script deliberately
-keeps the Ultralytics trainer, loss, DataLoader and augmentation pipeline
-unchanged.  It only adds project-root path resolution and a fail-fast dataset
-check before calling ``model.train``.
+The mainline experiments use YOLOv8 or YOLO26 without a P2 head.  The script
+deliberately keeps the Ultralytics trainer, loss, DataLoader and augmentation
+pipeline unchanged.  It only adds project-root path resolution and a fail-fast
+dataset check before calling ``model.train``.
 
 Examples (run from this directory or from the repository root)::
 
     python scripts/train.py --data atlas --init coco --epochs 300 --batch 8
     python scripts/train.py --data atlas --model yolov8s.yaml --imgsz 1280 --epochs 300 --batch 2 --rect
+    python scripts/train.py --data atlas --model yolo26n.yaml --init coco --epochs 300 --batch 8
     python scripts/train.py --resume runs/yolov8n_data_atlas_coco/weights/last.pt
 
 ATLAS is used with its native 25 pictogram-state classes.  No class remapping
@@ -28,6 +29,7 @@ except ImportError:  # supports ``python -m scripts.train`` from tl_detection/
 MODEL_CFG = ROOT / "configs" / "model" / "yolov8n.yaml"
 DEFAULT_HYP = ROOT / "configs" / "hyp_base.yaml"
 VALID_SCALES = ("n", "s", "m", "l", "x")
+SUPPORTED_FAMILIES = ("yolov8", "yolo26")
 
 DATA_PRESETS = {
     "atlas": ROOT / "configs" / "data_atlas.yaml",
@@ -37,21 +39,30 @@ DATA_PRESETS = {
 }
 
 
-def extract_v8_scale(model_arg: str | Path) -> str:
-    """Return the YOLOv8 scale and reject P2 model variants."""
+def extract_model_spec(model_arg: str | Path, *, allow_p2: bool = False) -> tuple[str, str]:
+    """Return ``(family, scale)`` for a supported model identifier."""
     stem = Path(str(model_arg)).stem.lower()
-    if "p2" in stem:
+    if "p2" in stem and not allow_p2:
         raise SystemExit(
-            "P2 models are intentionally disabled for this experiment. "
-            "Use yolov8n/s/m/l/x.yaml without '-p2'."
+            "P2 models require the explicit --allow-p2 ablation flag. "
+            "The default mainline uses YOLOv8/YOLO26 models without '-p2'."
         )
-    match = re.search(r"(?:^|[^a-z])yolov8([nsmlx])(?:$|[-_.])", stem)
+    family_pattern = "|".join(re.escape(family) for family in SUPPORTED_FAMILIES)
+    match = re.search(rf"(?:^|[^a-z])({family_pattern})([nsmlx])(?:$|[-_.])", stem)
     if not match:
         raise SystemExit(
-            f"Cannot infer a YOLOv8 scale from '{model_arg}'. "
-            "Expected yolov8n/s/m/l/x.yaml or .pt."
+            f"Cannot infer a supported YOLO family/scale from '{model_arg}'. "
+            "Expected yolov8n/s/m/l/x or yolo26n/s/m/l/x (.yaml or .pt)."
         )
-    return match.group(1)
+    return match.group(1), match.group(2)
+
+
+def extract_v8_scale(model_arg: str | Path, *, allow_p2: bool = False) -> str:
+    """Backward-compatible helper returning the scale for a YOLOv8 model."""
+    family, scale = extract_model_spec(model_arg, allow_p2=allow_p2)
+    if family != "yolov8":
+        raise SystemExit(f"Expected a YOLOv8 model, got '{model_arg}'.")
+    return scale
 
 
 def resolve_model_arg(model_arg: str | Path) -> str:
@@ -66,14 +77,19 @@ def resolve_model_arg(model_arg: str | Path) -> str:
     return str(model_arg)
 
 
-def resolve_init_weights(model_arg: str | Path, init: str) -> str | None:
-    """Resolve official COCO weights matching the selected YOLOv8 scale."""
+def resolve_init_weights(
+    model_arg: str | Path,
+    init: str,
+    *,
+    allow_p2: bool = False,
+) -> str | None:
+    """Resolve official COCO weights matching the selected family and scale."""
     if init == "scratch":
         return None
     if init != "coco":
         raise SystemExit(f"Unsupported --init '{init}'. Use 'coco' or 'scratch'.")
-    scale = extract_v8_scale(model_arg)
-    return f"yolov8{scale}.pt"
+    family, scale = extract_model_spec(model_arg, allow_p2=allow_p2)
+    return f"{family}{scale}.pt"
 
 
 def resolve_data(arg: str | None, tier: str) -> Path:
@@ -105,7 +121,7 @@ def assert_resumable_checkpoint(checkpoint: Path) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Train YOLOv8 without P2 on traffic-light data")
+    parser = argparse.ArgumentParser(description="Train YOLOv8/YOLO26 on traffic-light data")
     parser.add_argument(
         "--data",
         type=str,
@@ -122,13 +138,18 @@ def main() -> None:
         "--init",
         choices=["coco", "scratch"],
         default="coco",
-        help="official YOLOv8 COCO initialization or random initialization",
+        help="official YOLOv8/YOLO26 COCO initialization or random initialization",
     )
     parser.add_argument(
         "--model",
         type=str,
         default=str(MODEL_CFG),
-        help="YOLOv8 model YAML/weight without a P2 head (default: yolov8n.yaml)",
+        help="YOLOv8/YOLO26 model YAML/weight; P2 requires --allow-p2 (default: yolov8n.yaml)",
+    )
+    parser.add_argument(
+        "--allow-p2",
+        action="store_true",
+        help="run an explicit P2 ablation; disabled in the mainline by default",
     )
     parser.add_argument("--hyp", type=Path, default=DEFAULT_HYP, help="training YAML overrides")
     parser.add_argument(
@@ -196,8 +217,8 @@ def main() -> None:
         raise SystemExit("--epochs must be a positive integer.")
 
     model_arg = resolve_model_arg(args.model)
-    scale = extract_v8_scale(model_arg)
-    init_weights = resolve_init_weights(model_arg, args.init)
+    model_family, scale = extract_model_spec(model_arg, allow_p2=args.allow_p2)
+    init_weights = resolve_init_weights(model_arg, args.init, allow_p2=args.allow_p2)
 
     hyp_path = resolve_project_path(args.hyp)
     hyp = yaml.safe_load(hyp_path.read_text(encoding="utf-8")) or {}
@@ -228,7 +249,12 @@ def main() -> None:
         model = model.load(init_weights)
 
     data_name = data_yaml.stem.removeprefix("data_")
-    run_name = args.name or f"yolov8{scale}_{data_name}_{args.init}"
+    model_variant = (
+        f"{model_family}{scale}-p2"
+        if "p2" in Path(model_arg).stem.lower()
+        else f"{model_family}{scale}"
+    )
+    run_name = args.name or f"{model_variant}_{data_name}_{args.init}"
     mode = "rect=True" if hyp.get("rect", False) else "rect=False"
     print(
         f"[train] model={Path(model_arg).name} init={args.init} "

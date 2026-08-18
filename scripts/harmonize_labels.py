@@ -1,13 +1,13 @@
 """harmonize_labels.py — assemble unified train/val/test splits for each tier.
 
-Inputs (produced by convert_{dtld,bosch,lisa,oi}.py):
+Inputs (produced by convert_{dtld,lisa,oi}.py):
     datasets/yolo/<source>/<tier>/labels/{train,val,test}/*.txt
     datasets/yolo/<source>/images/{train,val,test}/*.<ext>
 
 This script:
   1. Indexes every (image, label) pair per source+tier.
   2. Builds stratified train/val/test lists:
-       - Sources with a native test split (Bosch 'test', LISA 'test',
+       - Sources with a native test split (LISA 'test',
          DTLD-only-images-in-test) keep their test split for cross-dataset eval.
        - DTLD (no native split) is stratified into train/val by a hash of the
          image stem (90/10), test set held out separately if requested.
@@ -20,7 +20,7 @@ This script:
 
 Usage:
     python scripts/harmonize_labels.py --val-frac 0.1 --seed 42
-    python scripts/harmonize_labels.py --tier A --sources dtld,bosch,lisa,openimages
+    python scripts/harmonize_labels.py --tier A --sources dtld,lisa,openimages
 """
 from __future__ import annotations
 import argparse
@@ -32,11 +32,12 @@ from _common import yolo_root, STATE2ID, ID2STATE
 
 TIERS = ("tierA", "tierB", "tierC")
 # Sources contributing to each tier:
-#   Tier A: all four (incl. Open Images, which is state-free).
-#   Tier B/C: the three state-rich sources only.
+#   Tier A: DTLD, LISA and Open Images (state-free auxiliary source).
+#   Tier B: DTLD and LISA state-rich sources.
+#   Tier C: DTLD only.
 TIER_SOURCES = {
-    "tierA": ["dtld", "bosch", "lisa", "openimages"],
-    "tierB": ["dtld", "bosch", "lisa"],
+    "tierA": ["dtld", "lisa", "openimages"],
+    "tierB": ["dtld", "lisa"],
     "tierC": ["dtld"],
 }
 IMG_EXTS = (".png", ".jpg", ".jpeg", ".bmp", ".webp")

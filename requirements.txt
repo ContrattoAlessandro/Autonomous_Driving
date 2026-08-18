@@ -1,8 +1,8 @@
 # YOLOv8 native-ATLAS traffic-light detection — Python dependencies
 # Tested with Python 3.12 on Windows + RTX 5070 (CUDA 13.2).
 
-# Core training/inference framework.  The project uses the official YOLOv8
-# trainer and COCO-pretrained yolov8*.pt weights; no custom P2 code is needed.
+# Core training/inference framework. The active TLR model uses standard
+# YOLO11n P3-P5 prototype with COCO weights; P2 is not active.
 ultralytics>=8.4.116
 
 # Open Images V7 download + dataset inspection/visualization.
@@ -20,6 +20,10 @@ pyyaml>=6.0
 matplotlib>=3.7
 seaborn>=0.13
 tqdm>=4.66
+pillow>=10.0
+
+# Pinned parser used only to prepare the clean DTLD JPEG tree from raw TIFFs.
+dtld-parsing @ git+https://github.com/julimueller/dtld_parsing.git@f9575de42a1951017db44fcf07584b4ef143b397
 
 # Optional: ONNX export validation (ultralytics calls onnx internally).
 onnx>=1.16

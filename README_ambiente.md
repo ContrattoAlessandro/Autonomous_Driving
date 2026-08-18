@@ -1,80 +1,57 @@
-# tl_detection — YOLOv8 native-ATLAS traffic-light detection
+# Baseline storica Ultralytics su ATLAS
 
-Riproducible benchmark Ultralytics per la detection di semafori su immagini di
-guida autonoma. La configurazione principale usa **YOLOv8 senza P2**, il
-trainer ufficiale Ultralytics e input quadrati ad alta risoluzione.
+> Questo documento descrive la pipeline preliminare YOLOv8/YOLO26 su ATLAS.
+> Non è la mainline della tesi. La pipeline attiva è TLR-YOLO-MTL ed è
+> descritta in `README.md` e `docs/metodologia_pipeline_attuale.md`.
 
-## Dataset ATLAS
+Questa baseline usa il trainer ufficiale Ultralytics per la detection e la
+classificazione delle 25 classi native ATLAS. È conservata per confronti di
+architettura, risoluzione e P2, ma non predice relevance e non usa il contesto
+delle frecce DTLD paired.
 
-ATLAS mantiene la propria ontologia: **25 classi pictogramma–stato**, comprese
-`off`, `red-yellow` e le frecce direzionali. Le annotazioni sono già nel formato
-YOLO (`class cx cy width height`) e non vengono riscritte dal progetto.
+## Dataset e split ATLAS
 
-Il paper di riferimento è Polley et al., *The ATLAS of Traffic Lights: A
-Reliable Perception Framework for Autonomous Driving* (IEEE IV 2025,
-[preprint](https://arxiv.org/abs/2504.19722)).
-
-```text
-dataset_ATLAS/ATLAS/
-├── ATLAS_classes.yaml
-├── train/{front_medium,front_tele,front_wide}/{images,labels}/
-└── test/{front_medium,front_tele,front_wide}/{images,labels}/
-```
-
-Preparazione degli split:
+ATLAS mantiene la propria ontologia a 25 classi pittogramma-stato. Le label
+native YOLO non vengono riscritte. Il test ufficiale rimane separato; la
+validation è selezionata dal train per blocchi temporali condivisi tra le
+camere, con deduplicazione e controllo SHA-256.
 
 ```powershell
 python scripts/convert_atlas.py --raw ../dataset_ATLAS/ATLAS --val-frac 0.1
 ```
 
-Il comando conserva senza modifiche il test nativo e ricava validation dal solo
-train. In accordo con il paper ATLAS, che campiona le annotazioni a bassa
-frequenza per evitare frame quasi identici, la validation viene selezionata per
-blocchi temporali condivisi tra le camere; un blocco di guardia ai bordi viene
-escluso da entrambi gli split. Prima dello split vengono rimossi i duplicati
-byte-per-byte e viene verificata la disgiunzione SHA-256 tra train e test. I file
-`datasets/yolo/atlas/{train,val,test}.txt` contengono percorsi assoluti per
-evitare errori di working directory.
-
-## Training
+## Training delle baseline
 
 ```powershell
+# YOLOv8 nano, mainline della baseline storica
 python scripts/check_env.py --scale n
-python scripts/train.py --data atlas --model yolov8n.yaml --init coco --imgsz 1280 --epochs 300 --batch 8
+python scripts/train.py --data atlas --model yolov8n.yaml --init coco `
+  --imgsz 1280 --epochs 300 --batch 8
+
+# Confronto YOLO26 nano
+python scripts/check_env.py --family yolo26 --scale n
+python scripts/train.py --data atlas --model yolo26n.yaml --init coco `
+  --imgsz 1280 --epochs 300 --batch 8 --name yolo26n_atlas_coco
 ```
 
-Il numero di epoche si può modificare dal comando, per esempio con
-`--epochs 10`; se l'opzione viene omessa resta il valore definito in
-`configs/hyp_base.yaml` (attualmente 300).
-
-Il training usa il batching aspect-ratio-aware ufficiale di Ultralytics
-(`rect=true`) come impostazione predefinita:
-
-```powershell
-python scripts/train.py --data atlas --model yolov8n.yaml --init coco --imgsz 1280 --epochs 300 --batch 8
-```
-
-Sono rifiutati esplicitamente i modelli `*-p2`. Il resume richiede il checkpoint
-esplicito:
+Il batching aspect-ratio-aware (`rect=true`) e le loss restano quelli
+Ultralytics. Il resume richiede un checkpoint esplicito:
 
 ```powershell
 python scripts/train.py --resume runs/yolov8n_atlas_coco/weights/last.pt
 ```
 
-Prima del training `train.py` controlla percorsi, split, classi e formato delle
-label. Loss, DataLoader, mosaic, letterbox e NMS restano quelli ufficiali
-Ultralytics; le sole modifiche sono i valori YAML conservativi per oggetti
-piccoli e classi colore/pictogramma.
+## Ablazione P2 storica
 
-## Layout
+P2 è disabilitata sia nella pipeline TLR-YOLO-MTL sia nella baseline standard.
+Per l'ablazione controllata ATLAS deve essere abilitata esplicitamente:
 
-```text
-configs/model/yolov8n.yaml       modello principale senza P2
-configs/hyp_base.yaml            override ufficiali per il training
-configs/data_atlas.yaml          nc=25, nomi ATLAS nativi
-scripts/convert_atlas.py         validazione + split, senza remap label
-scripts/train.py                 entry point YOLOv8
-scripts/eval.py                  mAP ufficiale sul test separato
-runs/                             output Ultralytics
-results/                          metriche e tabelle
+```powershell
+python scripts/train.py --data atlas --init coco `
+  --model yolov8n-p2.yaml --allow-p2 --imgsz 1280 --epochs 50 --batch 8 `
+  --name yolov8n-p2_atlas_coco
 ```
+
+Queste run misurano la detection ATLAS e non costituiscono un'ablazione della
+relevance. L'esperimento scientifico principale richiede invece il confronto
+local-only/context-stopgrad/paired-context descritto nella metodologia corrente.

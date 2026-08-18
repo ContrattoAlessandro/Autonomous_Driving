@@ -1,0 +1,54 @@
+{
+  "schema": "TLR-YOLO-MTL Milestone 7 mixed training smoke v1",
+  "input_shape": [
+    3,
+    3,
+    320,
+    320
+  ],
+  "sources": [
+    "DTLD",
+    "ATLAS",
+    "CeyMo"
+  ],
+  "image_ids": [
+    "DTLD/train/DE_BBBR667_2015-04-20_10-50-01-032131_k0",
+    "ATLAS/train/front_medium/front_medium_17-581417243",
+    "CeyMo/train/1"
+  ],
+  "model_variant": "yolo11n",
+  "parameters": 3118696,
+  "p2_enabled": false,
+  "context_paired_images": 0,
+  "context_gradient_scales": [
+    0.0,
+    0.0,
+    0.0
+  ],
+  "losses": {
+    "total": 38.15665054321289,
+    "traffic_detection": 34.12180709838867,
+    "state": 1.138299584388733,
+    "pictogram": 0.5359285473823547,
+    "arrow_detection": 1.9520721435546875,
+    "arrow_direction": 0.24108213186264038,
+    "relevance": 0.2987362742424011,
+    "nwd": 0.5745594501495361
+  },
+  "matches": {
+    "state": 16,
+    "pictogram": 16,
+    "arrow_direction": 7,
+    "relevance": 6,
+    "arrow_valid_images": 1
+  },
+  "gradient_sums": {
+    "traffic_detection": 20365.356379251694,
+    "state": 60.056696116924286,
+    "pictogram": 31.593204960227013,
+    "arrow": 248.7879566294435,
+    "relevance": 18.886502027511597,
+    "film": 0.5942665934562683
+  },
+  "all_active_heads_receive_gradient": true
+}

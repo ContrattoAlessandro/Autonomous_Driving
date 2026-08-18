@@ -1,0 +1,90 @@
+# Resource-aware training contract for YOLOv8s P3-P5 unified MTL model.
+seed: 42
+records: datasets/tlr_mtl_dtld_paired/records.jsonl
+model_variant: yolov8s
+model_config: configs/model/tlr_yolov8s.yaml
+warmstart_weights: yolov8s.pt
+input_size: [800, 1600]  # [height, width]
+device: cuda
+amp: true
+amp_initial_scale: 32.0      # validated finite at batch 4-16 / 800x1600
+workers: 4               # 4 worker processes con persistent workers
+prefetch_factor: 2       # mantiene la coda GPU sempre satura
+micro_batch_size: 8      # ottimale per RTX 5070 (6.17 GB VRAM, 31.8 img/s)
+effective_batch_size: 32
+gradient_accumulation_steps: 4 # 8 * 4 = 32 effective batch
+optimizer_steps_per_epoch: 100  # 3,200 sampled images
+gradient_clip_norm: 10.0
+weight_decay: 0.01
+ema_decay: 0.9999
+checkpoint_every: 10
+val_steps_per_epoch: 25  # ~100-200 validazioni veloci a fine epoca
+p2_enabled: false
+horizontal_flip: false
+training_sources: [DTLD]
+require_paired: true
+
+architecture:
+  token_dim: 128
+  token_feature_dim: 64
+  attention_heads: 4
+  max_traffic_lights: 32
+  max_arrows: 16
+  traffic_score_threshold: 0.01
+  arrow_score_threshold: 0.05
+  ego_lane_enabled: false  # attivare solo dopo aver aggiunto label is_ego_lane
+
+source_quotas_per_effective_batch:
+  DTLD: 32              # paired TL + relevance + frecce; unico dominio di training
+
+loss_weights:
+  detection: 1.0
+  state: 0.75
+  round: 0.5
+  maneuver: 1.0
+  ego_lane: 0.5
+  relevance: 1.0
+  nwd: 0.5
+  association: 0.0       # si abilita solo quando esistono label TL-arrow
+
+loss:
+  attribute_focal_gamma: 1.5
+  maneuver_focal_gamma: 2.0
+  ego_lane_focal_gamma: 2.0
+  relevance_focal_gamma: 2.0
+  nwd_constant: 12.0
+
+phases:
+  - name: perception_and_local_relevance
+    epochs: 30
+    freeze_backbone: false
+    freeze_neck: false
+    freeze_perception: false
+    context_enabled: false
+    relevance_perception_gradient_scale: 0.0
+    backbone_lr: 0.0001
+    head_lr: 0.001
+    freeze_batchnorm: false
+
+  - name: cross_attention
+    epochs: 20
+    freeze_backbone: true
+    freeze_neck: true
+    freeze_perception: true
+    context_enabled: true
+    relevance_perception_gradient_scale: 0.0
+    backbone_lr: 0.0
+    head_lr: 0.001
+    freeze_batchnorm: true
+
+  - name: joint_finetuning
+    epochs: 80
+    freeze_backbone: false
+    freeze_neck: false
+    freeze_perception: false
+    context_enabled: true
+    relevance_perception_gradient_scale: 0.25
+    relevance_perception_gradient_scale_end: 1.0
+    backbone_lr: 0.00001
+    head_lr: 0.0001
+    freeze_batchnorm: false

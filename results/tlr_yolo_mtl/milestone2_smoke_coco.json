@@ -1,0 +1,103 @@
+{
+  "warmstart": {
+    "weights": "C:\\Users\\alexa\\Desktop\\Tesi_Autonomous_Driving\\tl_detection\\yolo11l.pt",
+    "loaded_state_items": 1009,
+    "loaded_parameters": 25310480,
+    "target_parameters": 25311251,
+    "loaded_fraction": 0.9999695392377089,
+    "loaded_state_items_by_region": {
+      "backbone": 498,
+      "neck_p3_p5": 396,
+      "detect_p3_p5": 115
+    },
+    "pyramid_levels": [
+      "P3",
+      "P4",
+      "P5"
+    ],
+    "p2_enabled": false,
+    "one_class_output_initialized_randomly": true,
+    "trainer_reuses_in_memory_weights": true,
+    "mapping_examples": {
+      "model.0.conv.weight": "model.0.conv.weight",
+      "model.0.bn.weight": "model.0.bn.weight",
+      "model.0.bn.bias": "model.0.bn.bias",
+      "model.0.bn.running_mean": "model.0.bn.running_mean",
+      "model.0.bn.running_var": "model.0.bn.running_var",
+      "model.0.bn.num_batches_tracked": "model.0.bn.num_batches_tracked",
+      "model.1.conv.weight": "model.1.conv.weight",
+      "model.1.bn.weight": "model.1.bn.weight",
+      "model.1.bn.bias": "model.1.bn.bias",
+      "model.1.bn.running_mean": "model.1.bn.running_mean",
+      "model.1.bn.running_var": "model.1.bn.running_var",
+      "model.1.bn.num_batches_tracked": "model.1.bn.num_batches_tracked"
+    }
+  },
+  "forward": {
+    "schema": "TLR-YOLO-MTL Milestone 2 smoke v2 (P3-P5)",
+    "config": "C:\\Users\\alexa\\Desktop\\Tesi_Autonomous_Driving\\tl_detection\\configs\\model\\yolo11l.yaml",
+    "torch": "2.13.0+cu130",
+    "ultralytics": "8.4.117",
+    "device": "cuda",
+    "device_name": "NVIDIA GeForce RTX 5070",
+    "dtype": "float16",
+    "input_shape": [
+      1,
+      3,
+      800,
+      1600
+    ],
+    "strides": [
+      8,
+      16,
+      32
+    ],
+    "feature_shapes": [
+      [
+        1,
+        256,
+        100,
+        200
+      ],
+      [
+        1,
+        512,
+        50,
+        100
+      ],
+      [
+        1,
+        512,
+        25,
+        50
+      ]
+    ],
+    "prediction_shape": [
+      1,
+      5,
+      26250
+    ],
+    "dense_locations": 26250,
+    "parameters": 25311251,
+    "peak_memory_bytes": 245435904
+  },
+  "onnx": {
+    "path": "C:\\Users\\alexa\\Desktop\\Tesi_Autonomous_Driving\\tl_detection\\results\\tlr_yolo_mtl\\yolo11l-p3-p5-detection.onnx",
+    "bytes": 50953869,
+    "opset": 17,
+    "fp16": true,
+    "input_shape": [
+      1,
+      3,
+      800,
+      1600
+    ],
+    "output_shape": [
+      1,
+      5,
+      26250
+    ],
+    "nodes": 653,
+    "onnx_checker_ok": true
+  }
+}

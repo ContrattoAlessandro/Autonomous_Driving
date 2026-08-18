@@ -1,0 +1,63 @@
+# TLR-YOLO-MTL unified-attention dataset contract
+schema_version: "3.0"
+seed: 42
+input_size: [1600, 800]  # [width, height]
+
+taxonomy:
+  object_type: [traffic_light, road_arrow]
+  traffic_light_state: [red, yellow, green, off]
+  traffic_light_round: binary
+  shared_maneuver: [left, straight, right]
+  traffic_light_round_semantics: learned_wildcard
+  road_arrow_ego_lane: binary
+  red_yellow: mask_state_loss
+  flashing: mask_state_loss
+  composite_traffic_light_pictogram: multi_hot_maneuver
+  non_vehicle_traffic_light: ignore_region
+  fully_occluded_traffic_light: ignore_region
+
+split_policy:
+  preserve_official_test: true
+  DTLD:
+    validation_fraction: 0.20
+    group_by: [city, route, sequence]
+    stratify_by: road_arrow_direction
+  ATLAS:
+    validation_fraction: 0.10
+    group_by: synchronized_30_second_block
+  LISA:
+    validation_fraction: 0.0
+    train_sequences: [dayTrain, nightTrain]
+    test_sequences: [daySequence1, daySequence2, nightSequence1, nightSequence2]
+
+sources:
+  DTLD:
+    labels: ../DTLD/v2.0
+    images: ../DTLD_jpg_plain
+    reject_annotated_preview_images: true
+    road_arrows: ../dataset_ALL_USER_ANNOTATED
+    road_arrow_annotation_scope: official_train
+    road_arrow_annotation_status: human_verified_exhaustive
+  ATLAS:
+    root: ../dataset_ATLAS/ATLAS
+  LISA:
+    root: ../dataset_LISA/LISA
+
+excluded_sources:
+  TLD_READY: replaced_by_human_verified_paired_DTLD
+  CeyMo: replaced_by_human_verified_paired_DTLD
+  Bosch_Small_Traffic_Lights: incomplete_download_removed_by_user_decision
+
+training_scope:
+  sources: [DTLD]
+  require_paired_traffic_light_relevance_arrows: true
+  preserve_official_test_for_final_evaluation: true
+  external_detector_evaluation_only: [ATLAS, LISA]
+
+output:
+  root: datasets/tlr_mtl_dtld_paired
+  records: records.jsonl
+  splits: splits.json
+  qa_report: qa_report.json
+  overlays: overlays
+  overlay_fraction: 0.01

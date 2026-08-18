@@ -1,0 +1,193 @@
+{
+  "initialization": {
+    "warmstart": {
+      "weights": "C:\\Users\\alexa\\Desktop\\Tesi_Autonomous_Driving\\tl_detection\\yolo11l.pt",
+      "loaded_state_items": 1009,
+      "loaded_parameters": 25310480,
+      "target_parameters": 25311251,
+      "loaded_fraction": 0.9999695392377089,
+      "loaded_state_items_by_region": {
+        "backbone": 498,
+        "neck_p3_p5": 396,
+        "detect_p3_p5": 115
+      },
+      "pyramid_levels": [
+        "P3",
+        "P4",
+        "P5"
+      ],
+      "p2_enabled": false,
+      "one_class_output_initialized_randomly": true,
+      "trainer_reuses_in_memory_weights": true,
+      "mapping_examples": {
+        "model.0.conv.weight": "model.0.conv.weight",
+        "model.0.bn.weight": "model.0.bn.weight",
+        "model.0.bn.bias": "model.0.bn.bias",
+        "model.0.bn.running_mean": "model.0.bn.running_mean",
+        "model.0.bn.running_var": "model.0.bn.running_var",
+        "model.0.bn.num_batches_tracked": "model.0.bn.num_batches_tracked",
+        "model.1.conv.weight": "model.1.conv.weight",
+        "model.1.bn.weight": "model.1.bn.weight",
+        "model.1.bn.bias": "model.1.bn.bias",
+        "model.1.bn.running_mean": "model.1.bn.running_mean",
+        "model.1.bn.running_var": "model.1.bn.running_var",
+        "model.1.bn.num_batches_tracked": "model.1.bn.num_batches_tracked"
+      }
+    },
+    "checkpoint": {
+      "loaded": false
+    }
+  },
+  "onnx": {
+    "path": "C:\\Users\\alexa\\Desktop\\Tesi_Autonomous_Driving\\tl_detection\\results\\tlr_yolo_mtl\\tlr-yolo-mtl-p3-p5-fp16.onnx",
+    "bytes": 54490733,
+    "opset": 17,
+    "dtype": "float16",
+    "input_shape": [
+      1,
+      3,
+      800,
+      1600
+    ],
+    "output_names": [
+      "traffic_detection",
+      "state_logits",
+      "pictogram_logits",
+      "arrow_detection",
+      "arrow_direction_logits",
+      "relevance_logits"
+    ],
+    "output_shapes": [
+      [
+        1,
+        5,
+        26250
+      ],
+      [
+        1,
+        4,
+        26250
+      ],
+      [
+        1,
+        4,
+        26250
+      ],
+      [
+        1,
+        5,
+        26250
+      ],
+      [
+        1,
+        3,
+        26250
+      ],
+      [
+        1,
+        1,
+        26250
+      ]
+    ],
+    "nodes": 1253,
+    "checker_ok": true,
+    "p2_enabled": false
+  },
+  "onnxruntime_parity": {
+    "input_shape": [
+      1,
+      3,
+      320,
+      320
+    ],
+    "provider": "CPUExecutionProvider",
+    "absolute_tolerance": 0.002,
+    "outputs": {
+      "traffic_detection": {
+        "shape": [
+          1,
+          5,
+          2100
+        ],
+        "max_abs_error": 0.0005645751953125,
+        "mean_abs_error": 2.1625159206450917e-05,
+        "within_tolerance": true
+      },
+      "state_logits": {
+        "shape": [
+          1,
+          4,
+          2100
+        ],
+        "max_abs_error": 3.5669654607772827e-07,
+        "mean_abs_error": 6.352227188699544e-08,
+        "within_tolerance": true
+      },
+      "pictogram_logits": {
+        "shape": [
+          1,
+          4,
+          2100
+        ],
+        "max_abs_error": 3.7997961044311523e-07,
+        "mean_abs_error": 6.109212336014025e-08,
+        "within_tolerance": true
+      },
+      "arrow_detection": {
+        "shape": [
+          1,
+          5,
+          2100
+        ],
+        "max_abs_error": 7.62939453125e-05,
+        "mean_abs_error": 6.944656433915952e-06,
+        "within_tolerance": true
+      },
+      "arrow_direction_logits": {
+        "shape": [
+          1,
+          3,
+          2100
+        ],
+        "max_abs_error": 3.5762786865234375e-07,
+        "mean_abs_error": 6.16527700003644e-08,
+        "within_tolerance": true
+      },
+      "relevance_logits": {
+        "shape": [
+          1,
+          1,
+          2100
+        ],
+        "max_abs_error": 3.5390257835388184e-07,
+        "mean_abs_error": 6.38429185073619e-08,
+        "within_tolerance": true
+      }
+    },
+    "parity_ok": true
+  },
+  "pytorch_profile": {
+    "runtime": "PyTorch CUDA FP16",
+    "input_shape": [
+      1,
+      3,
+      800,
+      1600
+    ],
+    "warmup_iterations": 20,
+    "measured_iterations": 100,
+    "mean_ms": 22.89572799956659,
+    "median_ms": 22.712650010362267,
+    "p90_ms": 23.399930002051406,
+    "p95_ms": 23.84766000614036,
+    "peak_memory_bytes": 282231296,
+    "includes_preprocessing": false,
+    "includes_nms": false,
+    "tensorrt": false
+  },
+  "tensorrt": {
+    "available": false,
+    "validated": false,
+    "reason": "TensorRT runtime is not installed in the current environment"
+  }
+}

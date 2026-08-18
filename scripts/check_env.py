@@ -1,4 +1,4 @@
-"""Verify the YOLOv8/no-P2 training environment."""
+"""Verify the YOLOv8/YOLO26 no-P2 training environment."""
 from __future__ import annotations
 
 import argparse
@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 VALID_SCALES = ("n", "s", "m", "l", "x")
+VALID_FAMILIES = ("yolov8", "yolo26")
 
 
 def section(title: str) -> None:
@@ -13,7 +14,8 @@ def section(title: str) -> None:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Verify environment for YOLOv8 training")
+    parser = argparse.ArgumentParser(description="Verify environment for YOLOv8/YOLO26 training")
+    parser.add_argument("--family", choices=VALID_FAMILIES, default="yolov8")
     parser.add_argument("--scale", choices=VALID_SCALES, default="n")
     args = parser.parse_args()
     root = Path(__file__).resolve().parent.parent
@@ -39,9 +41,10 @@ def main() -> int:
     else:
         print("WARN: CUDA is not visible; training will be CPU-only.")
 
-    section(f"model config: yolov8{args.scale}.yaml")
-    local_cfg = root / "configs" / "model" / f"yolov8{args.scale}.yaml"
-    cfg_src = str(local_cfg) if local_cfg.exists() else f"yolov8{args.scale}.yaml"
+    model_stem = f"{args.family}{args.scale}"
+    section(f"model config: {model_stem}.yaml")
+    local_cfg = root / "configs" / "model" / f"{model_stem}.yaml"
+    cfg_src = str(local_cfg) if local_cfg.exists() else f"{model_stem}.yaml"
     try:
         from ultralytics import YOLO
 
@@ -52,9 +55,9 @@ def main() -> int:
         print(f"FAIL: cannot build {cfg_src}: {exc}")
         ok = False
 
-    section(f"COCO weights: yolov8{args.scale}.pt")
+    section(f"COCO weights: {model_stem}.pt")
     try:
-        weights = YOLO(f"yolov8{args.scale}.pt")
+        weights = YOLO(f"{model_stem}.pt")
         print(f"weights OK: nc={getattr(weights.model, 'nc', '?')}")
     except Exception as exc:
         print(f"FAIL: cannot load COCO weights: {exc}")

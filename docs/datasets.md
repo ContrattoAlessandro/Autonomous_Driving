@@ -1,148 +1,122 @@
-# Public Traffic-Light Datasets — Selection & Justification
+# Dataset della pipeline TLR-YOLO-MTL
 
-This document justifies the dataset corpus for training **YOLO26x-P2** for
-real-world traffic-light detection. It is the data chapter of the thesis's
-offline evaluation (§6.2).
+**Stato:** documento corrente, allineato al corpus DTLD paired.
 
-Each candidate is scored on four axes requested by the task: **size & variety**
-(day/night/rain/multi-city), **annotations** (state / pictograms / boxes),
-**YOLO compatibility**, and **reported performance**.
+**Configurazione canonica:** `configs/tlr_yolo_mtl_data.yaml`.
 
----
+## Corpus attivo
 
-## 1. Chosen corpus (4 datasets + 1 optional)
+La pipeline multi-task usa esclusivamente DTLD, ATLAS e LISA. Le immagini sono
+referenziate dal manifest e non duplicate.
 
-### 1.1 DTLD — DriveU Traffic Light Dataset  *(primary)*
-- **Source:** Fregin, Müller, Kreßel, Dietmayer — Ulm University / BMW. ICRA 2018.
-  DOI [10.1109/ICRA.2018.8460737](https://doi.org/10.1109/ICRA.2018.8460737).
-- **Download:** https://www.traffic-light-data.com/  ·  parser: https://github.com/julimueller/dtld_parsing
-- **Size:** ~23,000+ frames, **>100,000 annotated lights**.
-- **Variety:** **11 German cities** (Berlin, Bochum, Bremen, Dortmund, Düsseldorf,
-  Essen, Frankfurt, Fulda, Hannover, Kassel, Köln); variable weather/illumination
-  (day / night / rain).
-- **Annotations (richest of any public set):** per-light attributes include
-  `state` (red / yellow / green / red+yellow / off), **`pictogram`** (arrow
-  left/straight/right, pedestrian, tram, bicycle, …), `direction`, `relevance`,
-  `occlusion`, `orientation`. YAML label files.
-- **YOLO compat:** no first-party YOLO format, but the YAML is clean — conversion
-  is a ~50-line script (see `scripts/convert_dtld.py`, scaffolded by
-  `dtld_parsing`).
-- **Reported perf:** the original paper benchmarks Faster R-CNN; DTLD is now the
-  de-facto large-scale state+pictogram benchmark in German TLR research.
-- **Role in corpus:** **primary** source of state *and* pictogram supervision;
-  sole dataset enabling the Tier-C pictogram experiment.
-- **License:** research-use (check the LICENSE file shipped with the download
-  before any commercial use).
+| Sorgente | Train | Validation | Test | Totale | Task validi |
+|---|---:|---:|---:|---:|---|
+| DTLD | 22.563 | 5.962 | 12.453 | 40.978 | detection, stato, pittogramma, relevance; frecce su train/val |
+| ATLAS | 27.187 | 3.029 | 2.828 | 33.044 | detection, stato, pittogramma |
+| LISA | 20.535 | 0 | 22.481 | 43.016 | detection, stato, pittogramma |
+| **Totale** | **70.285** | **8.991** | **37.762** | **117.038** | — |
 
-### 1.2 Bosch Small Traffic Lights Dataset (BSTLD)
-- **Source:** Behrendt, Novak, Botros — Heidelberg University (HCI/IWR). ITSC 2017.
-  (Hosted under the legacy `bosch-ros-pkg` GitHub org — hence the name.)
-- **Download:** https://hci.iwr.uni-heidelberg.de/node/6132  ·  repo https://github.com/bosch-ros-pkg/bstld
-- **Size:** ~13,425 test images + training set; ~6,000–7,000 TL boxes (small-object
-  focus, many empty frames).
-- **Variety:** Germany, urban + rural; **explicitly engineered for far / early
-  detection, including self-illuminated lights at night** (day + night).
-- **Annotations:** 4 states — **off / green / yellow / red**. Boxes + state.
-  **No pictograms.**
-- **YOLO compat:** **best of any dataset here** — multiple ready-made converters,
-  e.g. https://github.com/DRitchiezx/bosch_traffic_lights_to_yolo .
-- **Reported perf:** authors report SSD ~50–60% AP on their day/night split;
-  later YOLO/RetinaNet variants reach 70–90% mAP.
-- **Role in corpus:** small-object benchmark (perfect fit for the **P2 head**),
-  day/night robustness validation, and the only **commercially-permissive** set.
-- **License:** **MIT** (commercial-friendly).
+Il QA corrente conta 369.522 semafori, 31.528 frecce stradali e 104.812
+ignore region.
 
-### 1.3 LISA Traffic Light Dataset
-- **Source:** Jensen, Philipsen, Møgelmose, Moeslund (Aalborg) + Trivedi (UCSD LISA).
-  IEEE T-ITS 2016.
-- **Download:** http://cvrr.ucsd.edu/LISA/lisa-traffic-light-dataset.html  ·
-  Kaggle mirror: https://www.kaggle.com/datasets/mbornoe/lisa-traffic-light-dataset
-- **Size:** **43,017 frames, 113,888 annotated lights**.
-- **Variety:** San Diego, CA, USA; **explicit day + night test split**
-  (~24,988 day / ~18,028 night frames).
-- **Annotations:** **14 classes** derived from `go / stop / warning` × direction
-  (+ a "light vs full housing" toggle). State-rich.
-- **YOLO compat:** excellent — 3+ community YOLO repos
-  (e.g. https://github.com/AbhishekSinha-git/LISA-traffic-light-dataset-yolov8-Training).
-- **Reported perf:** authors' CNN pipeline reaches high-80s / low-90s % state
-  recognition accuracy; standard day/night benchmark in TLR literature.
-- **Role in corpus:** **US geography complement** (horizontal 3-light stacks vs
-  European signals) and a canonical day/night test split.
-- **License:** CC BY-NC-SA 4.0 (**non-commercial** — fine for thesis/research).
+## DTLD paired: sorgente principale
 
-### 1.4 Open Images V7 — "Traffic light" class
-- **Source:** Google. Class list confirmed at
-  https://storage.googleapis.com/openimages/2018_04/class-descriptions-boxable.csv .
-- **Size:** ~14,000–20,000 traffic-light boxes (≈10× COCO's TL count). *Exact count
-  to be confirmed via `fiftyone` during conversion (Phase 1 caveat).*
-- **Variety:** global crowd-sourced imagery, mostly daytime, mixed signal housings.
-- **Annotations:** **bounding box only — NO state, NO pictograms.**
-- **YOLO compat:** trivial via `fiftyone` or `oidv6-to-yolo`; extract just the
-  "Traffic light" class.
-- **Role in corpus:** **large-scale detection pretraining + hard negatives** to
-  boost box localization and worldwide housing variety. State-free, so used only
-  in Tier A.
-- **License:** CC BY 4.0 (commercial-friendly).
+DTLD fornisce box, stato, pittogramma, relevance, occlusione e orientamento.
+Le immagini pulite in `../DTLD_jpg_plain` sono rigenerate dai TIFF originali;
+la pipeline rifiuta immagini preview con box o testo impressi nei pixel.
 
-### 1.5 LaRa (optional — not in the primary corpus)
-- **Source:** Inria Lille / Univ. Lille. IEEE SSCI / IJCNN 2013.
-- **Size:** ~11,179 frames from one Paris urban sequence.
-- **Variety:** Paris dense urban, daytime only (weak day/night).
-- **Annotations:** 3 states (green/red/yellow), no pictograms.
-- **Role:** optional extra EU geographic diversity if Tier-B numbers need a
-  second European city beyond the DTLD German set.
+Le annotazioni umane in `../dataset_ALL_USER_ANNOTATED` coprono esattamente le
+28.525 immagini dell'official-train DTLD:
 
----
+- 13.670 immagini con almeno una freccia;
+- 14.855 immagini negative esaustive;
+- 31.528 box;
+- `straight`: 15.805;
+- `left`: 7.740;
+- `right`: 2.874;
+- `straight-left`: 998;
+- `straight-right`: 4.111.
 
-## 2. Datasets considered and rejected
+Il converter richiede corrispondenza uno-a-uno tra immagini, label utente e
+record DTLD. I file label vuoti sono negativi verificati, non annotazioni
+mancanti. Le frecce sono fuse nei record DTLD, producendo supervisione paired
+per relevance e frecce sulla stessa immagine.
 
-| Dataset | Why rejected |
+I 12.453 record DTLD official-test non sono coperti dalle annotazioni frecce:
+restano validi per semafori e relevance con `arrow_detection=false`.
+
+## ATLAS: sorgente ausiliaria
+
+ATLAS aggiunge diversità di camera, distanza e configurazione dei semafori. La
+sua ontologia nativa a 25 classi viene fattorizzata nelle tassonomie comuni di
+stato e pittogramma. Le dimensioni sono sempre lette dal JPEG reale perché
+18.639 immagini non usano il canvas nominale 1920x1200.
+
+Il test nativo è preservato. La validation viene ricavata dal train per blocchi
+temporali sincronizzati tra le camere, evitando frame quasi duplicati tra
+split.
+
+## LISA: sorgente ausiliaria e dominio giorno/notte
+
+LISA aggiunge il dominio statunitense e sequenze giorno/notte. La pipeline usa
+le sequenze `dayTrain` e `nightTrain` per il train e conserva le sequenze
+ufficiali day/night per il test. Non viene ricavata una validation LISA.
+
+Le annotazioni duplicate della stessa box sono fuse quando compatibili; i
+conflitti di pittogramma vengono mascherati invece di forzare un target.
+
+## Tassonomie e mascheramento
+
+| Task | Tassonomia |
 |---|---|
-| **COCO** "traffic light" (#10) | Only ~2–3k TL instances (≈10× fewer than Open Images), **no state**, superseded by OI for detection pretraining. |
-| **BDD100K** | TL appears **only as segmentation masks** (id 25), not in the 10-class detection benchmark; masks → bbox loses state info. Useful only as background augmentation. |
-| **Waymo Open Dataset** | Richest labels (state + arrow + lane association), but heavy `.tfrecord` extraction friction + non-commercial research license. Not worth the lift for an offline benchmark. |
-| **nuScenes** | **No 2D traffic-light bounding boxes** in camera images — TLs are static 3D map polygons only. Useless for YOLO training. |
-| **Mapillary Vistas** | Segmentation masks only, no state. Same limitation as BDD. |
-| **WPI TL** (2010–2012) | Small, historical; superseded by LISA/DTLD. |
+| stato | `red`, `yellow`, `green`, `off` |
+| pittogramma | `round`, `left`, `straight`, `right` |
+| frecce | multi-hot `[left, straight, right]` |
+| relevance | binaria per semaforo |
 
----
+`red_yellow`, stati sconosciuti, pittogrammi composti non rappresentabili e
+label mancanti producono target `-1` e non contribuiscono alla loss relativa.
+Semafori non veicolari e back-facing diventano ignore region.
 
-## 3. Unified class taxonomy
+## Politica degli split
 
-The three tiers (see `configs/data_tier{A,B,C}.yaml`):
+- preservare sempre i test ufficiali;
+- separare DTLD per città, route e sequenza;
+- stratificare la validation DTLD per direzione delle frecce;
+- separare ATLAS per blocco temporale sincronizzato;
+- impedire leakage di ID, sequenza e percorso;
+- eseguire QA di geometria, classi, task mask e immagini mancanti.
 
-### Tier A — detection only (1 class)
-`traffic_light` — all four datasets contribute. Baseline + box-prior pretraining.
+Il report generato è `datasets/tlr_mtl_dtld_paired/qa_report.json`.
 
-### Tier B — state model (6 classes, **primary**)
-`red`, `yellow`, `green`, `red_yellow`, `off`, `unknown`
+## Sorgenti escluse dalla mainline
 
-Per-source mapping (`scripts/harmonize_labels.py` encodes this):
+| Sorgente | Motivo |
+|---|---|
+| CeyMo | sostituito dalle annotazioni paired e verificate su DTLD |
+| TLD-READY | annotazioni non ottenibili; sostituito dal paired DTLD |
+| Bosch Small Traffic Lights | download disponibile incompleto e rimosso per decisione progettuale |
+| Open Images | detection-only; non necessario nel contratto multi-task corrente |
+| COCO | non è un dataset della pipeline; i suoi pesi sono usati solo per warm-start |
 
-| Unified class | LISA native             | Bosch native | DTLD native (`state` attr)            |
-|---|---|---|---|
-| `red`         | `stop`, `stopLeft`      | `Red`        | `red`                                |
-| `yellow`      | `warning`, `warningLeft`| `Yellow`     | `yellow`                             |
-| `green`       | `go`, `goLeft`          | `Green`      | `green`                              |
-| `red_yellow`  | —                       | —            | `red_yellow`                         |
-| `off`         | —                       | `Off`        | `off`                                |
-| `unknown`     | anything else           | —            | `unknown` / occluded / irrelevant    |
+I dati eventualmente presenti sul disco non entrano nel manifest, nel sampler
+o nelle loss della pipeline corrente.
 
-LISA "light vs full housing" annotations are collapsed to the housing box.
+## Riproduzione
 
-### Tier C — pictogram ablation (DTLD only, ~9 classes)
-The 6 Tier-B classes **plus** pictogram subclasses that DTLD labels separately:
-`arrow_left`, `arrow_straight`, `arrow_right`, `pedestrian`, … (final list
-written by `harmonize_labels.py` after scanning DTLD; rare pictograms merged).
+Da `tl_detection/`:
 
----
+```powershell
+# Solo per rigenerare JPEG puliti in una nuova directory vuota
+.\.venv\Scripts\python.exe -B -m scripts.prepare_dtld_images `
+  --data-path ..\DTLD `
+  --label-path ..\DTLD\v2.0 `
+  --target-path ..\DTLD_jpg_plain_new
 
-## 4. Caveats to verify during Phase 1 (conversion)
+# Rigenera manifest, split e QA
+.\.venv\Scripts\python.exe -B -m tlr_yolo_mtl prepare `
+  --output datasets\tlr_mtl_dtld_paired --skip-overlays
+```
 
-The following figures are widely reported but should be re-confirmed against the
-downloaded data before being cited in the thesis:
-- **DTLD** exact frame / box counts (commonly ~23,758 frames / ~119,000 lights).
-- **BSTLD** exact image / box totals (the repo README does not print them; check
-  the Heidelberg benchmark page).
-- **Open Images V7** exact traffic-light box count (~14–20k).
-`scripts/eda.py` writes the verified counts to `results/splits_summary.csv`.
+Per il razionale completo vedere `docs/metodologia_pipeline_attuale.md` e
+`docs/tlr_yolo_mtl_milestone10_dtld_paired.md`.

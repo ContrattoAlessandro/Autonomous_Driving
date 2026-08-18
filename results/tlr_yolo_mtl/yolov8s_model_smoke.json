@@ -1,0 +1,84 @@
+{
+  "warmstart": {
+    "weights": "C:\\Users\\alexa\\Desktop\\Tesi_Autonomous_Driving\\tl_detection\\yolov8s.pt",
+    "loaded_state_items": 349,
+    "loaded_parameters": 11135600,
+    "target_parameters": 11136374,
+    "loaded_fraction": 0.999930498023863,
+    "loaded_state_items_by_region": {
+      "backbone": 162,
+      "neck_p3_p5": 108,
+      "detect_p3_p5": 79
+    },
+    "pyramid_levels": [
+      "P3",
+      "P4",
+      "P5"
+    ],
+    "p2_enabled": false,
+    "type_output_initialized_randomly": true,
+    "trainer_reuses_in_memory_weights": true,
+    "mapping_examples": {
+      "model.0.conv.weight": "model.0.conv.weight",
+      "model.0.bn.weight": "model.0.bn.weight",
+      "model.0.bn.bias": "model.0.bn.bias",
+      "model.0.bn.running_mean": "model.0.bn.running_mean",
+      "model.0.bn.running_var": "model.0.bn.running_var",
+      "model.0.bn.num_batches_tracked": "model.0.bn.num_batches_tracked",
+      "model.1.conv.weight": "model.1.conv.weight",
+      "model.1.bn.weight": "model.1.bn.weight",
+      "model.1.bn.bias": "model.1.bn.bias",
+      "model.1.bn.running_mean": "model.1.bn.running_mean",
+      "model.1.bn.running_var": "model.1.bn.running_var",
+      "model.1.bn.num_batches_tracked": "model.1.bn.num_batches_tracked"
+    }
+  },
+  "forward": {
+    "schema": "TLR-YOLO-MTL Milestone 2 smoke v2 (P3-P5)",
+    "config": "C:\\Users\\alexa\\Desktop\\Tesi_Autonomous_Driving\\tl_detection\\configs\\model\\tlr_yolo11n.yaml",
+    "torch": "2.13.0+cu130",
+    "ultralytics": "8.4.117",
+    "device": "cuda",
+    "device_name": "NVIDIA GeForce RTX 5070",
+    "dtype": "float16",
+    "input_shape": [
+      1,
+      3,
+      800,
+      1600
+    ],
+    "strides": [
+      8,
+      16,
+      32
+    ],
+    "feature_shapes": [
+      [
+        1,
+        128,
+        100,
+        200
+      ],
+      [
+        1,
+        256,
+        50,
+        100
+      ],
+      [
+        1,
+        512,
+        25,
+        50
+      ]
+    ],
+    "prediction_shape": [
+      1,
+      6,
+      26250
+    ],
+    "dense_locations": 26250,
+    "parameters": 11136374,
+    "peak_memory_bytes": 93059072
+  }
+}

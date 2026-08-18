@@ -55,7 +55,7 @@ def collect(tier: str) -> tuple[Counter, list[float], Counter, int, int]:
                 img = cand
                 break
             if img is None:
-                for src in ("dtld", "bosch", "lisa", "openimages"):
+                for src in ("dtld", "lisa", "openimages"):
                     cand_dir = yolo_root() / src / "images" / split
                     for ext in (".png", ".jpg", ".jpeg"):
                         c = cand_dir / f"{lbl.stem}{ext}"

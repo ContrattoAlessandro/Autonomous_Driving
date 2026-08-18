@@ -1,0 +1,128 @@
+{
+  "warmstart": {
+    "weights": "C:\\Users\\alexa\\Desktop\\Tesi_Autonomous_Driving\\tl_detection\\yolov8s.pt",
+    "loaded_state_items": 349,
+    "loaded_parameters": 11135600,
+    "target_parameters": 11136374,
+    "loaded_fraction": 0.999930498023863,
+    "loaded_state_items_by_region": {
+      "backbone": 162,
+      "neck_p3_p5": 108,
+      "detect_p3_p5": 79
+    },
+    "pyramid_levels": [
+      "P3",
+      "P4",
+      "P5"
+    ],
+    "p2_enabled": false,
+    "type_output_initialized_randomly": true,
+    "trainer_reuses_in_memory_weights": true,
+    "mapping_examples": {
+      "model.0.conv.weight": "model.0.conv.weight",
+      "model.0.bn.weight": "model.0.bn.weight",
+      "model.0.bn.bias": "model.0.bn.bias",
+      "model.0.bn.running_mean": "model.0.bn.running_mean",
+      "model.0.bn.running_var": "model.0.bn.running_var",
+      "model.0.bn.num_batches_tracked": "model.0.bn.num_batches_tracked",
+      "model.1.conv.weight": "model.1.conv.weight",
+      "model.1.bn.weight": "model.1.bn.weight",
+      "model.1.bn.bias": "model.1.bn.bias",
+      "model.1.bn.running_mean": "model.1.bn.running_mean",
+      "model.1.bn.running_var": "model.1.bn.running_var",
+      "model.1.bn.num_batches_tracked": "model.1.bn.num_batches_tracked"
+    }
+  },
+  "forward": {
+    "schema": "TLR-YOLO-MTL unified attention smoke v1",
+    "input_shape": [
+      1,
+      3,
+      800,
+      1600
+    ],
+    "dtype": "float16",
+    "strides": [
+      8,
+      16,
+      32
+    ],
+    "dense_locations": 26250,
+    "shapes": {
+      "detection": [
+        1,
+        6,
+        26250
+      ],
+      "state": [
+        1,
+        4,
+        26250
+      ],
+      "round": [
+        1,
+        1,
+        26250
+      ],
+      "maneuver": [
+        1,
+        3,
+        26250
+      ],
+      "ego_lane": [
+        1,
+        1,
+        26250
+      ],
+      "traffic_candidates": [
+        1,
+        32
+      ],
+      "arrow_candidates": [
+        1,
+        16
+      ],
+      "relevance": [
+        1,
+        1,
+        32
+      ],
+      "attention": [
+        1,
+        4,
+        32,
+        17
+      ]
+    },
+    "type_classes": [
+      "traffic_light",
+      "road_arrow"
+    ],
+    "state_classes": [
+      "red",
+      "yellow",
+      "green",
+      "off"
+    ],
+    "maneuver_classes": [
+      "left",
+      "straight",
+      "right"
+    ],
+    "round_is_learned_wildcard": true,
+    "ego_lane_bias_enabled": false,
+    "null_token": true,
+    "attention_gate_initial_value": 0.0,
+    "local_fallback_exact_at_initialization": true,
+    "separate_arrow_detector": false,
+    "parameters": 11380027,
+    "parameter_groups": {
+      "unified_detect": 2116806,
+      "factorized_attributes": 47515,
+      "token_projections": 85568,
+      "cross_attention": 66790,
+      "relevance": 43780
+    },
+    "peak_memory_bytes": 102782464
+  }
+}

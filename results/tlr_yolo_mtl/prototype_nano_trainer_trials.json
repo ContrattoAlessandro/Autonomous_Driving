@@ -1,0 +1,44 @@
+{
+  "schema": "TLR-YOLO-MTL nano prototype trainer trials v1",
+  "model_variant": "yolo11n",
+  "input_size": [800, 1600],
+  "micro_batch_size": 16,
+  "effective_batch_size": 32,
+  "gradient_accumulation_steps": 2,
+  "amp_initial_scale": 32.0,
+  "p2_enabled": false,
+  "trials": [
+    {
+      "workers": 0,
+      "optimizer_steps": 1,
+      "elapsed_seconds_including_checkpoint": 46.086797999974806
+    },
+    {
+      "workers": 2,
+      "optimizer_steps": 1,
+      "elapsed_seconds_including_checkpoint": 48.54034020000836
+    },
+    {
+      "workers": 0,
+      "optimizer_steps": 3,
+      "elapsed_seconds_including_checkpoint": 54.86041029999615
+    },
+    {
+      "workers": 2,
+      "optimizer_steps": 3,
+      "elapsed_seconds_including_checkpoint": 49.86351600001217
+    },
+    {
+      "workers": 2,
+      "prefetch_factor": 1,
+      "optimizer_steps": 3,
+      "elapsed_seconds_including_checkpoint": 51.3951095000084
+    }
+  ],
+  "all_optimizer_steps_applied": true,
+  "checkpoint_bytes": 39304292,
+  "trial_prefetch_factor_for_workers_2": 2,
+  "selected_workers": 2,
+  "selected_prefetch_factor": 1,
+  "checkpoints_resumable": false
+}

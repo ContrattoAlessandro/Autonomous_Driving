@@ -1,0 +1,17 @@
+{
+  "schema": "TLR-YOLO-MTL bounded trainer trial v1",
+  "phase": "warmup_heads",
+  "input_size": [800, 1600],
+  "micro_batch_size": 4,
+  "effective_batch_size": 32,
+  "gradient_accumulation_steps": 8,
+  "optimizer_steps": 1,
+  "mean_micro_loss": 132.0482006072998,
+  "gradient_norm_before_clip": 8023.64404296875,
+  "amp_scale_before": 32.0,
+  "amp_scale_after": 32.0,
+  "optimizer_step_applied": true,
+  "elapsed_seconds_including_checkpoint": 38.78771730000153,
+  "p2_enabled": false,
+  "checkpoint_resumable": false
+}

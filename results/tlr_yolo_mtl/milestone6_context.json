@@ -1,0 +1,106 @@
+{
+  "warmstart": {
+    "weights": "C:\\Users\\alexa\\Desktop\\Tesi_Autonomous_Driving\\tl_detection\\yolo11l.pt",
+    "loaded_state_items": 1009,
+    "loaded_parameters": 25310480,
+    "target_parameters": 25311251,
+    "loaded_fraction": 0.9999695392377089,
+    "loaded_state_items_by_region": {
+      "backbone": 498,
+      "neck_p3_p5": 396,
+      "detect_p3_p5": 115
+    },
+    "pyramid_levels": [
+      "P3",
+      "P4",
+      "P5"
+    ],
+    "p2_enabled": false,
+    "one_class_output_initialized_randomly": true,
+    "trainer_reuses_in_memory_weights": true,
+    "mapping_examples": {
+      "model.0.conv.weight": "model.0.conv.weight",
+      "model.0.bn.weight": "model.0.bn.weight",
+      "model.0.bn.bias": "model.0.bn.bias",
+      "model.0.bn.running_mean": "model.0.bn.running_mean",
+      "model.0.bn.running_var": "model.0.bn.running_var",
+      "model.0.bn.num_batches_tracked": "model.0.bn.num_batches_tracked",
+      "model.1.conv.weight": "model.1.conv.weight",
+      "model.1.bn.weight": "model.1.bn.weight",
+      "model.1.bn.bias": "model.1.bn.bias",
+      "model.1.bn.running_mean": "model.1.bn.running_mean",
+      "model.1.bn.running_var": "model.1.bn.running_var",
+      "model.1.bn.num_batches_tracked": "model.1.bn.num_batches_tracked"
+    }
+  },
+  "dataset_pairing": {
+    "total_images": 119925,
+    "relevance_images": 40978,
+    "arrow_images": 2887,
+    "paired_images": 0,
+    "unpaired_context_gradient_scale": 0,
+    "paired_context_gradient_scale_percent": 25
+  },
+  "forward": {
+    "schema": "TLR-YOLO-MTL Milestone 6 arrow context smoke v1",
+    "input_shape": [
+      1,
+      3,
+      800,
+      1600
+    ],
+    "dtype": "float16",
+    "levels": [
+      "P3",
+      "P4",
+      "P5"
+    ],
+    "p2_enabled": false,
+    "traffic_detection_shape": [
+      1,
+      5,
+      26250
+    ],
+    "relevance_shape": [
+      1,
+      1,
+      26250
+    ],
+    "context_heatmap_shape": [
+      1,
+      3,
+      100,
+      200
+    ],
+    "context_pool_shape": [
+      1,
+      3,
+      4,
+      8
+    ],
+    "context_embedding_shape": [
+      1,
+      64
+    ],
+    "context_dimension": 64,
+    "film_zero_initialized": true,
+    "local_auxiliary_zero_initialized": true,
+    "context_parameters": 188318,
+    "total_parameters": 26983080,
+    "peak_memory_bytes": 249343488
+  },
+  "controlled_gradient": {
+    "film_initially_zero": true,
+    "positive_relevance_matches": 10,
+    "unpaired_gradient_scale": 0.0,
+    "unpaired_arrow_gradient_sum": 0.0,
+    "unpaired_context_gradient_sum": 1.1174978770743564,
+    "paired_gradient_scale": 0.25,
+    "paired_arrow_gradient_sum": 9.069278982876128e-05,
+    "paired_context_gradient_sum": 1.1174978770743564,
+    "dense_pre_nms_path": true,
+    "hard_matching_used": false,
+    "nms_used_in_training_path": false,
+    "controlled_gradient_ok": true
+  }
+}
