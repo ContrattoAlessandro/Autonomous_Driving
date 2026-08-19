@@ -153,6 +153,8 @@ Evaluated across the entire 5,962 validation/test images using standard Ultralyt
 | **Attributes** | **State Macro F1** | **`0.8392`** | Balanced performance across rare classes |
 | **Attributes** | **Round Signal F1** | **`0.8897`** | Distinguishes circular vs directional lights |
 
+> 📊 **Full Metric Baseline**: Per il tracciamento completo della convergenza epoca per epoca (Loss, mAP, AUPRC, State Acc) e le linee guida per i confronti futuri, consulta [`results/CHAMPION_MODEL_BENCHMARK_REFERENCE.md`](../results/CHAMPION_MODEL_BENCHMARK_REFERENCE.md).
+
 ---
 
 ## 6. Directory Structure & Key Files
