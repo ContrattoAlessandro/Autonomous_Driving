@@ -180,11 +180,22 @@ def map_arrow_direction(value: object) -> tuple[int, int, int] | None:
 
 
 def flip_pictogram(value: str | None) -> str | None:
-    if value == "left":
-        return "right"
-    if value == "right":
-        return "left"
-    return value
+    if value is None:
+        return None
+    val_norm = normalize_label(value)
+    flip_map = {
+        "left": "right",
+        "right": "left",
+        "arrow_left": "arrow_right",
+        "arrow_right": "arrow_left",
+        "straight_left": "straight_right",
+        "straight_right": "straight_left",
+        "str_left": "str_right",
+        "str_right": "str_left",
+        "left_straight": "right_straight",
+        "right_straight": "left_straight",
+    }
+    return flip_map.get(val_norm, value)
 
 
 def flip_direction_multihot(values: Sequence[int]) -> tuple[int, int, int]:

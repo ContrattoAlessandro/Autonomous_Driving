@@ -464,3 +464,312 @@ def compute_detection_and_attribute_map(
         "ap_medium": ap_medium,
         "map_state": map_state,
     }
+
+
+AREA_BUCKETS: dict[str, tuple[float, float]] = {
+    "<32": (0.0, 32.0),
+    "32-64": (32.0, 64.0),
+    "64-128": (64.0, 128.0),
+    "128-256": (128.0, 256.0),
+    "256-512": (256.0, 512.0),
+    ">512": (512.0, float("inf")),
+}
+
+SIDE_BUCKETS: dict[str, tuple[float, float]] = {
+    "<4": (0.0, 4.0),
+    "4-6": (4.0, 6.0),
+    "6-8": (6.0, 8.0),
+    "8-12": (8.0, 12.0),
+    ">12": (12.0, float("inf")),
+}
+
+
+def _get_bucket_name(value: float, buckets: Mapping[str, tuple[float, float]]) -> str | None:
+    for name, (low, high) in buckets.items():
+        if low <= value < high:
+            return name
+    return None
+
+
+def compute_granular_scale_metrics(
+    pred_boxes_list: Sequence[np.ndarray],
+    pred_scores_list: Sequence[np.ndarray],
+    pred_classes_list: Sequence[np.ndarray],
+    gt_boxes_list: Sequence[np.ndarray],
+    gt_classes_list: Sequence[np.ndarray],
+    *,
+    target_class: int = 0,
+    image_shape: tuple[int, int] = (800, 1600),
+    iou_thresholds: Sequence[float] = (0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80, 0.85, 0.90, 0.95),
+    conf_threshold: float = 0.05,
+    p3_stride: float = 8.0,
+) -> dict[str, Any]:
+    """Calculate fine-grained detection, recall, AP, and localization metrics across size buckets.
+
+    Supports both area buckets (<32, 32-64, 64-128, 128-256, 256-512, >512 px^2)
+    and minimum side buckets (<4, 4-6, 6-8, 8-12, >12 px).
+    """
+    h, w = image_shape
+    num_images = len(pred_boxes_list)
+    p3_cell_area = p3_stride * p3_stride
+
+    def _init_bucket_stats(bucket_dict: Mapping[str, tuple[float, float]]):
+        return {
+            b_name: {
+                "n_gt": 0,
+                "n_tp_conf": 0,
+                "n_fp_conf": 0,
+                "iou_tps": {iou: [] for iou in iou_thresholds},
+                "iou_scores": {iou: [] for iou in iou_thresholds},
+                "delta_x": [],
+                "delta_y": [],
+                "delta_r": [],
+                "delta_w": [],
+                "delta_h": [],
+                "rel_delta_w": [],
+                "rel_delta_h": [],
+                "gt_areas": [],
+                "gt_min_sides": [],
+            }
+            for b_name in bucket_dict
+        }
+
+    area_stats = _init_bucket_stats(AREA_BUCKETS)
+    side_stats = _init_bucket_stats(SIDE_BUCKETS)
+
+    for img_idx in range(num_images):
+        p_b = np.asarray(pred_boxes_list[img_idx], dtype=float).reshape(-1, 4)
+        p_s = np.asarray(pred_scores_list[img_idx], dtype=float).reshape(-1)
+        p_c = np.asarray(pred_classes_list[img_idx], dtype=np.int64).reshape(-1)
+        g_b = np.asarray(gt_boxes_list[img_idx], dtype=float).reshape(-1, 4)
+        g_c = np.asarray(gt_classes_list[img_idx], dtype=np.int64).reshape(-1)
+
+        # Filter target class
+        p_mask = (p_c == target_class)
+        g_mask = (g_c == target_class)
+
+        c_p_boxes = p_b[p_mask]
+        c_p_scores = p_s[p_mask]
+        c_g_boxes = g_b[g_mask]
+
+        # Calculate GT dimensions
+        gt_areas = []
+        gt_min_sides = []
+        gt_area_bucket = []
+        gt_side_bucket = []
+        for gb in c_g_boxes:
+            gw = max(gb[2] - gb[0], 0.0) * w
+            gh = max(gb[3] - gb[1], 0.0) * h
+            ga = max(gw * gh, 0.0)
+            gm = max(min(gw, gh), 0.0)
+            gt_areas.append(ga)
+            gt_min_sides.append(gm)
+            ab = _get_bucket_name(ga, AREA_BUCKETS)
+            sb = _get_bucket_name(gm, SIDE_BUCKETS)
+            gt_area_bucket.append(ab)
+            gt_side_bucket.append(sb)
+            if ab in area_stats:
+                area_stats[ab]["n_gt"] += 1
+                area_stats[ab]["gt_areas"].append(ga)
+            if sb in side_stats:
+                side_stats[sb]["n_gt"] += 1
+                side_stats[sb]["gt_min_sides"].append(gm)
+
+        # Calculate Pred dimensions
+        pred_areas = []
+        pred_min_sides = []
+        pred_area_bucket = []
+        pred_side_bucket = []
+        for pb in c_p_boxes:
+            pw = max(pb[2] - pb[0], 0.0) * w
+            ph = max(pb[3] - pb[1], 0.0) * h
+            pa = max(pw * ph, 0.0)
+            pm = max(min(pw, ph), 0.0)
+            pred_areas.append(pa)
+            pred_min_sides.append(pm)
+            pred_area_bucket.append(_get_bucket_name(pa, AREA_BUCKETS))
+            pred_side_bucket.append(_get_bucket_name(pm, SIDE_BUCKETS))
+
+        # Evaluate across IoU thresholds
+        for iou_thresh in iou_thresholds:
+            if len(c_p_boxes) == 0:
+                continue
+            if len(c_g_boxes) == 0:
+                for p_i, score in enumerate(c_p_scores):
+                    ab = pred_area_bucket[p_i]
+                    sb = pred_side_bucket[p_i]
+                    if ab in area_stats:
+                        area_stats[ab]["iou_tps"][iou_thresh].append(0)
+                        area_stats[ab]["iou_scores"][iou_thresh].append(float(score))
+                    if sb in side_stats:
+                        side_stats[sb]["iou_tps"][iou_thresh].append(0)
+                        side_stats[sb]["iou_scores"][iou_thresh].append(float(score))
+                continue
+
+            matches, unmatched_preds, _ = greedy_iou_match(
+                c_p_boxes, c_p_scores, c_g_boxes, iou_threshold=iou_thresh
+            )
+            matched_pred_to_gt = {m.prediction_index: m.target_index for m in matches}
+
+            for p_i, score in enumerate(c_p_scores):
+                if p_i in matched_pred_to_gt:
+                    gt_i = matched_pred_to_gt[p_i]
+                    # Target GT bucket determines evaluation bucket
+                    ab = gt_area_bucket[gt_i]
+                    sb = gt_side_bucket[gt_i]
+                    if ab in area_stats:
+                        area_stats[ab]["iou_tps"][iou_thresh].append(1)
+                        area_stats[ab]["iou_scores"][iou_thresh].append(float(score))
+                    if sb in side_stats:
+                        side_stats[sb]["iou_tps"][iou_thresh].append(1)
+                        side_stats[sb]["iou_scores"][iou_thresh].append(float(score))
+
+                    # For IoU 0.50, track operational TP / errors
+                    if abs(iou_thresh - 0.50) < 1e-4:
+                        if score >= conf_threshold:
+                            if ab in area_stats:
+                                area_stats[ab]["n_tp_conf"] += 1
+                            if sb in side_stats:
+                                side_stats[sb]["n_tp_conf"] += 1
+
+                        # Localization and scale errors
+                        gb = c_g_boxes[gt_i]
+                        pb = c_p_boxes[p_i]
+                        gt_cx = (gb[0] + gb[2]) / 2.0 * w
+                        gt_cy = (gb[1] + gb[3]) / 2.0 * h
+                        pred_cx = (pb[0] + pb[2]) / 2.0 * w
+                        pred_cy = (pb[1] + pb[3]) / 2.0 * h
+
+                        gt_w = max(gb[2] - gb[0], 0.0) * w
+                        gt_h = max(gb[3] - gb[1], 0.0) * h
+                        pred_w = max(pb[2] - pb[0], 0.0) * w
+                        pred_h = max(pb[3] - pb[1], 0.0) * h
+
+                        dx = abs(pred_cx - gt_cx)
+                        dy = abs(pred_cy - gt_cy)
+                        dr = float(np.sqrt(dx * dx + dy * dy))
+                        dw = abs(pred_w - gt_w)
+                        dh = abs(pred_h - gt_h)
+                        rel_dw = dw / max(gt_w, 1e-4)
+                        rel_dh = dh / max(gt_h, 1e-4)
+
+                        if ab in area_stats:
+                            area_stats[ab]["delta_x"].append(dx)
+                            area_stats[ab]["delta_y"].append(dy)
+                            area_stats[ab]["delta_r"].append(dr)
+                            area_stats[ab]["delta_w"].append(dw)
+                            area_stats[ab]["delta_h"].append(dh)
+                            area_stats[ab]["rel_delta_w"].append(rel_dw)
+                            area_stats[ab]["rel_delta_h"].append(rel_dh)
+
+                        if sb in side_stats:
+                            side_stats[sb]["delta_x"].append(dx)
+                            side_stats[sb]["delta_y"].append(dy)
+                            side_stats[sb]["delta_r"].append(dr)
+                            side_stats[sb]["delta_w"].append(dw)
+                            side_stats[sb]["delta_h"].append(dh)
+                            side_stats[sb]["rel_delta_w"].append(rel_dw)
+                            side_stats[sb]["rel_delta_h"].append(rel_dh)
+                else:
+                    # Unmatched prediction: bucket based on predicted box size
+                    ab = pred_area_bucket[p_i]
+                    sb = pred_side_bucket[p_i]
+                    if ab in area_stats:
+                        area_stats[ab]["iou_tps"][iou_thresh].append(0)
+                        area_stats[ab]["iou_scores"][iou_thresh].append(float(score))
+                        if abs(iou_thresh - 0.50) < 1e-4 and score >= conf_threshold:
+                            area_stats[ab]["n_fp_conf"] += 1
+                    if sb in side_stats:
+                        side_stats[sb]["iou_tps"][iou_thresh].append(0)
+                        side_stats[sb]["iou_scores"][iou_thresh].append(float(score))
+                        if abs(iou_thresh - 0.50) < 1e-4 and score >= conf_threshold:
+                            side_stats[sb]["n_fp_conf"] += 1
+
+    def _summarize_bucket_dict(stats_dict: Mapping[str, Any], is_area: bool) -> dict[str, Any]:
+        out = {}
+        for b_name, stats in stats_dict.items():
+            n_gt = stats["n_gt"]
+            tp = stats["n_tp_conf"]
+            fp = stats["n_fp_conf"]
+            fn = max(0, n_gt - tp)
+            recall = tp / max(n_gt, 1) if n_gt > 0 else 0.0
+            precision = tp / max(tp + fp, 1) if (tp + fp) > 0 else 0.0
+            f1 = 2 * precision * recall / max(precision + recall, 1e-6) if (precision + recall) > 0 else 0.0
+
+            # AP50 and AP50-95
+            ap_list = []
+            ap50 = 0.0
+            for iou in iou_thresholds:
+                tps = np.array(stats["iou_tps"][iou], dtype=float)
+                scs = np.array(stats["iou_scores"][iou], dtype=float)
+                ap_iou = compute_ap_from_matches(tps, scs, n_gt)
+                ap_list.append(ap_iou)
+                if abs(iou - 0.50) < 1e-4:
+                    ap50 = ap_iou
+            ap50_95 = float(np.mean(ap_list)) if ap_list else 0.0
+
+            # Localization errors
+            dx_arr = np.array(stats["delta_x"], dtype=float)
+            dy_arr = np.array(stats["delta_y"], dtype=float)
+            dr_arr = np.array(stats["delta_r"], dtype=float)
+            dw_arr = np.array(stats["delta_w"], dtype=float)
+            dh_arr = np.array(stats["delta_h"], dtype=float)
+            rel_dw_arr = np.array(stats["rel_delta_w"], dtype=float)
+            rel_dh_arr = np.array(stats["rel_delta_h"], dtype=float)
+
+            n_matches = len(dr_arr)
+            mean_dx = float(np.mean(dx_arr)) if n_matches > 0 else 0.0
+            mean_dy = float(np.mean(dy_arr)) if n_matches > 0 else 0.0
+            mean_dr = float(np.mean(dr_arr)) if n_matches > 0 else 0.0
+            median_dr = float(np.median(dr_arr)) if n_matches > 0 else 0.0
+            rmse_dr = float(np.sqrt(np.mean(dr_arr ** 2))) if n_matches > 0 else 0.0
+
+            mean_dw = float(np.mean(dw_arr)) if n_matches > 0 else 0.0
+            mean_dh = float(np.mean(dh_arr)) if n_matches > 0 else 0.0
+            rel_dw = float(np.mean(rel_dw_arr)) if n_matches > 0 else 0.0
+            rel_dh = float(np.mean(rel_dh_arr)) if n_matches > 0 else 0.0
+
+            # Grid cell coverage
+            if is_area:
+                gt_vals = stats["gt_areas"]
+                mean_size = float(np.mean(gt_vals)) if gt_vals else 0.0
+                cell_coverage = mean_size / p3_cell_area
+            else:
+                gt_vals = stats["gt_min_sides"]
+                mean_size = float(np.mean(gt_vals)) if gt_vals else 0.0
+                cell_coverage = mean_size / p3_stride
+
+            out[b_name] = {
+                "n_gt": n_gt,
+                "n_tp": tp,
+                "n_fp": fp,
+                "n_fn": fn,
+                "n_matched_50": n_matches,
+                "precision": precision,
+                "recall": recall,
+                "f1": f1,
+                "ap50": ap50,
+                "ap50_95": ap50_95,
+                "mean_dx": mean_dx,
+                "mean_dy": mean_dy,
+                "mean_dr": mean_dr,
+                "median_dr": median_dr,
+                "rmse_dr": rmse_dr,
+                "mean_dw": mean_dw,
+                "mean_dh": mean_dh,
+                "rel_delta_w": rel_dw,
+                "rel_delta_h": rel_dh,
+                "mean_ground_truth_size": mean_size,
+                "p3_stride_coverage_ratio": cell_coverage,
+            }
+        return out
+
+    return {
+        "area_buckets": _summarize_bucket_dict(area_stats, is_area=True),
+        "side_buckets": _summarize_bucket_dict(side_stats, is_area=False),
+        "p3_stride": p3_stride,
+        "p3_cell_area": p3_cell_area,
+        "image_shape": image_shape,
+        "conf_threshold": conf_threshold,
+    }
+

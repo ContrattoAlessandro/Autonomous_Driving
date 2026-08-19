@@ -1,4 +1,4 @@
-# Resource-aware training contract for YOLOv8s P3-P5 unified MTL model.
+# Resource-aware single-phase joint training contract for YOLOv8s P3-P5 unified MTL model.
 seed: 42
 records: datasets/tlr_mtl_dtld_paired/records.jsonl
 model_variant: yolov8s
@@ -55,36 +55,14 @@ loss:
   nwd_constant: 12.0
 
 phases:
-  - name: perception_and_local_relevance
-    epochs: 30
+  - name: joint_training_single_phase
+    epochs: 130
     freeze_backbone: false
     freeze_neck: false
     freeze_perception: false
-    context_enabled: false
+    context_enabled: true
     relevance_perception_gradient_scale: 0.0
+    relevance_perception_gradient_scale_end: 1.0
     backbone_lr: 0.0001
     head_lr: 0.001
-    freeze_batchnorm: false
-
-  - name: cross_attention
-    epochs: 20
-    freeze_backbone: true
-    freeze_neck: true
-    freeze_perception: true
-    context_enabled: true
-    relevance_perception_gradient_scale: 0.0
-    backbone_lr: 0.0
-    head_lr: 0.001
-    freeze_batchnorm: true
-
-  - name: joint_finetuning
-    epochs: 80
-    freeze_backbone: false
-    freeze_neck: false
-    freeze_perception: false
-    context_enabled: true
-    relevance_perception_gradient_scale: 0.25
-    relevance_perception_gradient_scale_end: 1.0
-    backbone_lr: 0.00001
-    head_lr: 0.0001
     freeze_batchnorm: false

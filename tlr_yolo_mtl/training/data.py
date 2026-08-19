@@ -16,6 +16,7 @@ from torch.utils.data import Dataset, Sampler
 
 from ..data.schema import BBox, ImageRecord
 from ..data.transforms import horizontal_flip_record
+from ..data.zoom_augmentation import context_preserving_zoom
 from ..model.arrows import encode_record_arrows
 from ..model.attributes import encode_record_attributes
 from ..model.context import encode_record_context_gradient
@@ -157,6 +158,8 @@ def prepare_training_sample(
     target_size: tuple[int, int] = DEFAULT_INPUT_SIZE,
     training: bool = False,
     horizontal_flip: bool = False,
+    context_zoom: bool = False,
+    zoom_prob: float = 0.5,
     rng: random.Random | None = None,
 ) -> dict[str, torch.Tensor | str]:
     """Transform one canonical record and every task target atomically."""
@@ -171,9 +174,16 @@ def prepare_training_sample(
     resolved_rng = rng or random.Random()
     transformed_record = record
     transformed_image = image_rgb
+    if training and context_zoom:
+        transformed_image, transformed_record = context_preserving_zoom(
+            transformed_image,
+            transformed_record,
+            zoom_prob=zoom_prob,
+            rng=resolved_rng,
+        )
     if training and horizontal_flip and resolved_rng.random() < 0.5:
-        transformed_image = np.ascontiguousarray(image_rgb[:, ::-1])
-        transformed_record = horizontal_flip_record(record)
+        transformed_image = np.ascontiguousarray(transformed_image[:, ::-1])
+        transformed_record = horizontal_flip_record(transformed_record)
     if training:
         transformed_image = _photometric_augment(transformed_image, resolved_rng)
 
@@ -256,6 +266,8 @@ class CanonicalMultiTaskDataset(Dataset[dict[str, torch.Tensor | str]]):
         target_size: tuple[int, int] = DEFAULT_INPUT_SIZE,
         training: bool = False,
         horizontal_flip: bool = False,
+        context_zoom: bool = False,
+        zoom_prob: float = 0.5,
         seed: int = 42,
         allowed_sources: Sequence[str] = ("DTLD", "ATLAS", "LISA"),
         require_paired: bool = False,
@@ -265,6 +277,8 @@ class CanonicalMultiTaskDataset(Dataset[dict[str, torch.Tensor | str]]):
         self.target_size = target_size
         self.training = training
         self.horizontal_flip = bool(horizontal_flip)
+        self.context_zoom = bool(context_zoom)
+        self.zoom_prob = float(zoom_prob)
         self.seed = int(seed)
         self.epoch = 0
         self.allowed_sources = frozenset(allowed_sources)
@@ -341,6 +355,8 @@ class CanonicalMultiTaskDataset(Dataset[dict[str, torch.Tensor | str]]):
             target_size=self.target_size,
             training=self.training,
             horizontal_flip=self.horizontal_flip,
+            context_zoom=self.context_zoom,
+            zoom_prob=self.zoom_prob,
             rng=rng,
         )
 

@@ -85,26 +85,36 @@ probe di memoria alla risoluzione finale:
 
 ## 4. Training TLR-YOLO-MTL
 
+Il training canonico è a **fase singola congiunta end-to-end** (`joint_training_single_phase`, 130 epoche).
+
 Prova di un optimizer step:
 
 ```powershell
 .\.venv\Scripts\python.exe -B -m scripts.train_tlr_yolo_mtl `
   --config configs\tlr_yolo_mtl_train.yaml --batch 4 `
-  --phase perception_and_local_relevance --max-optimizer-steps 1 `
+  --phase joint_training_single_phase --max-optimizer-steps 1 `
   --output-dir runs\tlr_yolo_mtl_unified_dtld_trial
 ```
 
-Training completo:
+Training completo (130 epoche congiunte):
+
+### Training Finale Champion (Configurazione E36)
+
+Training definitivo ad alta risoluzione nativa (960×1920), 130 epoche congiunte end-to-end, batch micro 2 × accumulazione 16 = effective batch 32:
 
 ```powershell
 .\.venv\Scripts\python.exe -B -m scripts.train_tlr_yolo_mtl `
-  --config configs\tlr_yolo_mtl_train.yaml --batch 4 `
-  --steps-per-epoch 100 `
-  --output-dir runs\tlr_yolo_mtl_unified_dtld_seed42
+  --config configs\tlr_yolo11s_champion_final.yaml `
+  --output-dir runs\tlr_yolo11s_champion_final
 ```
 
-Con batch fisico 4 il trainer usa otto passi di accumulo per mantenere il batch
-effettivo 32. Ogni finestra contiene 32 immagini DTLD paired.
+Ripresa dall'ultima epoca completa del champion:
+
+```powershell
+.\.venv\Scripts\python.exe -B -m scripts.train_tlr_yolo_mtl `
+  --config configs\tlr_yolo11s_champion_final.yaml `
+  --resume runs\tlr_yolo11s_champion_final\weights\last.pt
+```
 
 Ripresa dall'ultima epoca completa:
 

@@ -1,5 +1,11 @@
 """Model-building utilities for TLR-YOLO-MTL."""
 
+from .local_plus import (
+    LocalPlusRelevanceBranch,
+    LocalPlusResidualBlock,
+    LocalPlusTrafficControlDetect,
+    attach_local_plus_relevance_head,
+)
 from .milestone2 import (
     DEFAULT_CONFIG,
     EXPECTED_STRIDES,
@@ -26,4 +32,9 @@ __all__ = [
     "UnifiedHeadConfig",
     "UnifiedTrafficControlDetect",
     "attach_unified_relevance_head",
+    "LocalPlusResidualBlock",
+    "LocalPlusRelevanceBranch",
+    "LocalPlusTrafficControlDetect",
+    "attach_local_plus_relevance_head",
 ]
+

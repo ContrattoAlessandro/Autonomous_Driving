@@ -23,10 +23,39 @@ from ..model.attributes import (
 )
 from ..model.relevance import assigned_relevance_focal_bce
 from ..model.unified import TRAFFIC_LIGHT_CLASS
+from .tal import build_task_aligned_assigner
 
 
 class IgnoreAwareDetectionLoss(v8DetectionLoss):
     """YOLO loss that removes background BCE inside canonical ignore boxes."""
+
+    def __init__(
+        self,
+        model: torch.nn.Module,
+        tal_topk: int = 10,
+        tal_topk2: int | None = None,
+        tal_assigner_type: str = "standard",
+        tal_assigner_config: Mapping[str, Any] | None = None,
+    ):
+        super().__init__(model, tal_topk=tal_topk, tal_topk2=tal_topk2)
+        assigner_cfg = dict(tal_assigner_config or {})
+        assigner_type = assigner_cfg.pop("type", tal_assigner_type)
+        if "lambda_nwd" in assigner_cfg and "nwd_weight" not in assigner_cfg:
+            assigner_cfg["nwd_weight"] = assigner_cfg.pop("lambda_nwd")
+        if "tiny_transition_area" in assigner_cfg and "area_threshold" not in assigner_cfg:
+            assigner_cfg["area_threshold"] = assigner_cfg.pop("tiny_transition_area")
+        if str(assigner_type).lower() in ("nwd", "nwd_aware", "nwd_tal", "nwd_aware_tal"):
+            self.assigner = build_task_aligned_assigner(
+                assigner_type="nwd",
+                topk=tal_topk,
+                num_classes=self.nc,
+                alpha=0.5,
+                beta=6.0,
+                stride=self.stride.tolist(),
+                topk2=tal_topk2,
+                **assigner_cfg,
+            )
+
 
     def _ignored_anchor_mask(
         self,
@@ -192,6 +221,9 @@ def normalized_wasserstein_loss(
     return (1.0 - similarity).mean()
 
 
+from .contrastive_loss import TLArrowContrastiveLoss
+
+
 @dataclass(frozen=True, slots=True)
 class MultiTaskLossWeights:
     detection: float = 1.0
@@ -202,6 +234,7 @@ class MultiTaskLossWeights:
     relevance: float = 1.0
     nwd: float = 0.5
     association: float = 0.0
+    contrastive: float = 0.0
 
 
 @dataclass(slots=True)
@@ -221,6 +254,8 @@ class TLRMultiTaskLossResult:
     ego_lane_matches: int
     relevance_matches: int
     metrics: dict[str, torch.Tensor]
+    contrastive: torch.Tensor | None = None
+    contrastive_matches: int = 0
 
     # Read-only compatibility aliases for historical diagnostics.
     @property
@@ -380,9 +415,17 @@ class TLRMultiTaskCriterion:
         ego_lane_gamma: float = 2.0,
         relevance_gamma: float = 2.0,
         nwd_constant: float = 12.0,
+        tal_assigner_type: str = "standard",
+        tal_assigner_config: Mapping[str, Any] | None = None,
     ) -> None:
         self.weights = weights or MultiTaskLossWeights()
-        self.traffic = IgnoreAwareDetectionLoss(model)
+        self.tal_assigner_type = str(tal_assigner_type)
+        self.tal_assigner_config = tal_assigner_config
+        self.traffic = IgnoreAwareDetectionLoss(
+            model,
+            tal_assigner_type=tal_assigner_type,
+            tal_assigner_config=tal_assigner_config,
+        )
         if isinstance(self.traffic.hyp, Mapping):
             self.traffic.hyp = SimpleNamespace(**self.traffic.hyp)
         self.state_class_weights = state_class_weights
@@ -392,6 +435,12 @@ class TLRMultiTaskCriterion:
         self.ego_lane_gamma = float(ego_lane_gamma)
         self.relevance_gamma = float(relevance_gamma)
         self.nwd_constant = float(nwd_constant)
+        self.contrastive_criterion = TLArrowContrastiveLoss(
+            token_dim=128,
+            embed_dim=64,
+            temperature=0.1,
+        )
+
 
     def __call__(
         self,
@@ -551,6 +600,45 @@ class TLRMultiTaskCriterion:
         else:
             nwd_loss = parsed["boxes"].sum() * 0.0
 
+        # Contrastive InfoNCE Loss between TL and Arrow candidates
+        contrastive_matches = 0
+        if self.weights.contrastive > 0.0 and "traffic_tokens" in parsed and "arrow_tokens" in parsed:
+            cand_tl_tokens = parsed["traffic_tokens"]
+            cand_ar_tokens = parsed["arrow_tokens"]
+            if next(self.contrastive_criterion.parameters()).device != device:
+                self.contrastive_criterion = self.contrastive_criterion.to(device)
+
+            cand_tl_man = parsed.get(
+                "traffic_candidate_maneuver",
+                torch.zeros((cand_tl_tokens.shape[0], cand_tl_tokens.shape[1], 3), device=device),
+            )
+            cand_ar_man = parsed.get(
+                "arrow_candidate_maneuver",
+                torch.zeros((cand_ar_tokens.shape[0], cand_ar_tokens.shape[1], 3), device=device),
+            )
+            cand_tl_rnd = parsed.get(
+                "traffic_candidate_round",
+                torch.zeros((cand_tl_tokens.shape[0], cand_tl_tokens.shape[1]), device=device),
+            )
+            cand_tl_val = parsed.get("traffic_candidate_valid", torch.ones(cand_tl_tokens.shape[:2], dtype=torch.bool, device=device))
+            cand_ar_val = parsed.get("arrow_candidate_valid", torch.ones(cand_ar_tokens.shape[:2], dtype=torch.bool, device=device))
+
+            c_loss, c_metrics = self.contrastive_criterion(
+                cand_tl_tokens,
+                cand_ar_tokens,
+                traffic_maneuver=cand_tl_man,
+                arrow_maneuver=cand_ar_man,
+                traffic_round=cand_tl_rnd,
+                traffic_valid=cand_tl_val,
+                arrow_valid=cand_ar_val,
+            )
+            contrastive_loss = c_loss
+            contrastive_matches = int(c_metrics.get("valid_queries", 0))
+            contrastive_margin = float(c_metrics.get("alignment_margin", 0.0))
+        else:
+            contrastive_loss = parsed["scores"].sum() * 0.0
+            contrastive_margin = 0.0
+
         detection_loss = detection_vector.sum() * batch_size
         association_loss = parsed["attention_weights"].sum() * 0.0
         weight = self.weights
@@ -563,6 +651,7 @@ class TLRMultiTaskCriterion:
             + weight.ego_lane * ego_lane_loss
             + weight.relevance * relevance_loss
             + weight.association * association_loss
+            + weight.contrastive * contrastive_loss
         )
         metrics = {
             **detection_metrics,
@@ -575,6 +664,8 @@ class TLRMultiTaskCriterion:
             "contextual_relevance_loss": contextual_relevance_loss.detach(),
             "nwd_loss": nwd_loss.detach(),
             "association_loss": association_loss.detach(),
+            "contrastive_loss": contrastive_loss.detach(),
+            "contrastive_margin": torch.tensor(contrastive_margin, device=device),
             "total_loss": total.detach(),
         }
         return TLRMultiTaskLossResult(
@@ -587,10 +678,12 @@ class TLRMultiTaskCriterion:
             relevance=relevance_loss,
             nwd=nwd_loss,
             association=association_loss,
+            contrastive=contrastive_loss,
             state_matches=state_matches,
             round_matches=round_matches,
             maneuver_matches=maneuver_matches,
             ego_lane_matches=ego_lane_matches,
             relevance_matches=relevance_matches,
+            contrastive_matches=contrastive_matches,
             metrics=metrics,
         )

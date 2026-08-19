@@ -128,13 +128,146 @@ class EvaluationTests(unittest.TestCase):
             val_loader,  # type: ignore
             device=torch.device("cpu"),
             amp_enabled=False,
+            granular_scale_metrics=True,
         )
         self.assertIn("selection_score", result)
         self.assertIn("detection", result)
         self.assertIn("relevance", result)
         self.assertIn("attributes", result)
+        self.assertIn("granular_scale", result)
         self.assertEqual(result["samples_evaluated"], 2)
+
+    def test_granular_scale_metrics_computation(self) -> None:
+        from tlr_yolo_mtl.evaluation.metrics import (
+            AREA_BUCKETS,
+            SIDE_BUCKETS,
+            compute_granular_scale_metrics,
+        )
+
+        # Image size 800 x 1600
+        # GT 1: Tiny TL (area = 20 px^2, w=4, h=5) -> area in "<32", min_side in "4-6"
+        # GT 2: Medium TL (area = 200 px^2, w=10, h=20) -> area in "128-256", min_side in "8-12"
+        # Pred 1: Exactly matches GT 1 (high score 0.95)
+        # Pred 2: Slightly shifted match to GT 2 (score 0.85, dx=2px, dy=1px)
+        # Pred 3: FP box in area >512 (w=30, h=30 -> area=900)
+
+        # In normalized coordinates [x1, y1, x2, y2]
+        # GT 1: cx=100, cy=100, w=4, h=5 -> x1=98/1600, y1=97.5/800, x2=102/1600, y2=102.5/800
+        gt_boxes = np.array(
+            [
+                [98.0 / 1600.0, 97.5 / 800.0, 102.0 / 1600.0, 102.5 / 800.0],
+                [300.0 / 1600.0, 200.0 / 800.0, 310.0 / 1600.0, 220.0 / 800.0],
+            ],
+            dtype=float,
+        )
+        gt_classes = np.array([0, 0], dtype=np.int64)
+
+        pred_boxes = np.array(
+            [
+                [98.0 / 1600.0, 97.5 / 800.0, 102.0 / 1600.0, 102.5 / 800.0],
+                [302.0 / 1600.0, 201.0 / 800.0, 312.0 / 1600.0, 221.0 / 800.0],
+                [500.0 / 1600.0, 500.0 / 800.0, 530.0 / 1600.0, 530.0 / 800.0],
+            ],
+            dtype=float,
+        )
+        pred_scores = np.array([0.95, 0.85, 0.70], dtype=float)
+        pred_classes = np.array([0, 0, 0], dtype=np.int64)
+
+        metrics = compute_granular_scale_metrics(
+            [pred_boxes],
+            [pred_scores],
+            [pred_classes],
+            [gt_boxes],
+            [gt_classes],
+            image_shape=(800, 1600),
+            conf_threshold=0.50,
+        )
+
+        self.assertIn("area_buckets", metrics)
+        self.assertIn("side_buckets", metrics)
+
+        # Check <32 bucket
+        tiny_area = metrics["area_buckets"]["<32"]
+        self.assertEqual(tiny_area["n_gt"], 1)
+        self.assertEqual(tiny_area["n_tp"], 1)
+        self.assertEqual(tiny_area["recall"], 1.0)
+        self.assertAlmostEqual(tiny_area["ap50"], 1.0, delta=0.01)
+        self.assertAlmostEqual(tiny_area["mean_dr"], 0.0, places=4)
+
+        # Check 128-256 bucket
+        med_area = metrics["area_buckets"]["128-256"]
+        self.assertEqual(med_area["n_gt"], 1)
+        self.assertEqual(med_area["n_tp"], 1)
+        self.assertAlmostEqual(med_area["mean_dx"], 2.0, places=3)
+        self.assertAlmostEqual(med_area["mean_dy"], 1.0, places=3)
+
+        # Check >512 bucket (has 0 GT, 1 FP)
+        large_area = metrics["area_buckets"][">512"]
+        self.assertEqual(large_area["n_gt"], 0)
+        self.assertEqual(large_area["n_fp"], 1)
+        self.assertEqual(large_area["recall"], 0.0)
+
+        # Check side buckets
+        side_4_6 = metrics["side_buckets"]["4-6"]
+        self.assertEqual(side_4_6["n_gt"], 1)
+        self.assertEqual(side_4_6["n_tp"], 1)
+
+    def test_pairwise_nwd_and_greedy_nwd(self) -> None:
+        from tlr_yolo_mtl.evaluation.matching import greedy_nwd_match, pairwise_nwd
+
+        boxes_a = [[10.0, 10.0, 20.0, 30.0], [50.0, 50.0, 60.0, 70.0]]
+        boxes_b = [[11.0, 10.5, 21.0, 30.5], [100.0, 100.0, 110.0, 120.0]]
+
+        nwd_matrix = pairwise_nwd(boxes_a, boxes_b, constant=12.0)
+        self.assertEqual(nwd_matrix.shape, (2, 2))
+        self.assertGreater(nwd_matrix[0, 0], 0.8)  # close boxes have high NWD
+        self.assertLess(nwd_matrix[0, 1], 0.01)   # far boxes have near 0 NWD
+
+        scores = [0.95, 0.80]
+        matches, un_preds, un_tgts = greedy_nwd_match(boxes_a, scores, boxes_b, nwd_threshold=0.5)
+        self.assertEqual(len(matches), 1)
+        self.assertEqual(matches[0].prediction_index, 0)
+        self.assertEqual(matches[0].target_index, 0)
+        self.assertEqual(un_preds, [1])
+        self.assertEqual(un_tgts, [1])
+
+    def test_pairwise_and_greedy_center_distance(self) -> None:
+        from tlr_yolo_mtl.evaluation.matching import (
+            greedy_center_distance_match,
+            pairwise_center_distance,
+        )
+
+        boxes_a = [[10.0, 10.0, 20.0, 20.0], [50.0, 50.0, 60.0, 60.0]]  # centers: (15, 15), (55, 55)
+        boxes_b = [[12.0, 12.0, 22.0, 22.0], [50.0, 50.0, 60.0, 60.0]]  # centers: (17, 17), (55, 55)
+
+        distances = pairwise_center_distance(boxes_a, boxes_b)
+        self.assertEqual(distances.shape, (2, 2))
+        self.assertAlmostEqual(distances[0, 0], np.sqrt(8.0), places=3)
+        self.assertAlmostEqual(distances[1, 1], 0.0, places=3)
+
+        matches, un_preds, un_tgts = greedy_center_distance_match(
+            boxes_a, [0.9, 0.8], boxes_b, max_distance_px=5.0
+        )
+        self.assertEqual(len(matches), 2)
+        self.assertEqual(un_preds, [])
+        self.assertEqual(un_tgts, [])
+
+    def test_fixed_topk_candidates(self) -> None:
+        from tlr_yolo_mtl.model.unified import fixed_topk_candidates
+
+        scores = torch.tensor([[0.1, 0.9, 0.4, 0.8, 0.2]])
+        indices, selected_scores, valid = fixed_topk_candidates(scores, k=3, threshold=0.3)
+
+        self.assertEqual(indices.shape, (1, 3))
+        self.assertEqual(indices[0].tolist(), [1, 3, 2])  # indices of 0.9, 0.8, 0.4
+        self.assertTrue(torch.allclose(selected_scores[0], torch.tensor([0.9, 0.8, 0.4])))
+        self.assertEqual(valid[0].tolist(), [True, True, True])
+
+        # Test with threshold filtering out lowest
+        indices, selected_scores, valid = fixed_topk_candidates(scores, k=3, threshold=0.5)
+        self.assertEqual(valid[0].tolist(), [True, True, False])  # 0.4 is below 0.5
 
 
 if __name__ == "__main__":
     unittest.main()
+

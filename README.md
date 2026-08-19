@@ -3,7 +3,9 @@
 Pipeline camera-only e map-less per rilevare semafori e frecce stradali e
 stimare la relevance di ciascun semaforo per il veicolo ego.
 
-## Architettura attiva
+> **Master Documentation**: Per una panoramica scientifica e architetturale esaustiva a uso di agenti LLM e ricercatori, consulta [`docs/LLM_PROJECT_CONTEXT.md`](docs/LLM_PROJECT_CONTEXT.md).
+
+## Architettura attiva (Champion Model)
 
 La mainline usa YOLO11n P3–P5 a input `800×1600` e viene addestrata soltanto
 sul dominio DTLD paired. Il modello contiene:
@@ -67,7 +69,7 @@ Implementati e verificati:
 - detector unificato, attributi fattorizzati e target composti multi-hot;
 - cross-attention lane-aware, fallback locale e controllo dei gradienti;
 - loss multi-task con una sola assegnazione YOLO;
-- training in tre fasi, post-processing class-aware ed export ONNX a 11 output;
+- training end-to-end a fase singola congiunta, post-processing class-aware ed export ONNX a 11 output;
 - test unitari, forward reale e parità PyTorch/ONNX Runtime su smoke input.
 
 Restano attività sperimentali, non di implementazione: annotare `is_ego_lane`

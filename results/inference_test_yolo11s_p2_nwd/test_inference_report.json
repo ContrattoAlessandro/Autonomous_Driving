@@ -1,0 +1,63 @@
+{
+  "schema": "TLR-YOLO-MTL Test Inference and Postprocessing Report v1",
+  "checkpoint": "runs\\tlr_yolo11s_p2_nwd\\weights\\best_composite.pt",
+  "split": "val",
+  "samples_evaluated": 5962,
+  "eval_time_seconds": 110.25720143318176,
+  "throughput_fps": 54.07356546785835,
+  "postprocessing_config": {
+    "confidence_threshold": 0.25,
+    "iou_threshold": 0.45
+  },
+  "composite_selection_score": 0.8039692899904982,
+  "detection_metrics": {
+    "map50": 0.8446981123955151,
+    "map50_95": 0.5762512716921167,
+    "ap_tl_50": 0.7508513662909799,
+    "ap_arrow_50": 0.9385448585000501,
+    "ap_small": 0.7322226907914666,
+    "ap_medium": 0.9577634857028487,
+    "map_state": 0.5499759413486028
+  },
+  "relevance_metrics": {
+    "auprc": 0.9139476990818708,
+    "f1": 0.8545866831581117,
+    "precision": 0.8399384066780128,
+    "recall": 0.8697549513259483,
+    "relevant_red_recall": 0.7362995116657624
+  },
+  "attribute_metrics": {
+    "state_accuracy": 0.9505150955755374,
+    "state_macro_f1": 0.8682386871583805,
+    "round_f1": 0.8885413612224284,
+    "maneuver_macro_f1": 0.4374026106772206
+  },
+  "validation_losses": {
+    "total": 49.995316231858,
+    "detection": 49.55264297567168,
+    "state": 0.12957459750170783,
+    "round": 0.15579093924296605,
+    "maneuver": 0.06393054821612763,
+    "ego_lane": 0.04819420914114334,
+    "relevance": 0.11428208103847887,
+    "nwd": 0.13057411843586222
+  },
+  "visualizations": [
+    "results\\inference_test_yolo11s_p2_nwd\\visualizations\\test_sample_01_DE_BBBR667_2015-04-17_10-50-44-969603_k0.jpg",
+    "results\\inference_test_yolo11s_p2_nwd\\visualizations\\test_sample_02_DE_BBBR667_2015-04-17_10-50-45-633408_k0.jpg",
+    "results\\inference_test_yolo11s_p2_nwd\\visualizations\\test_sample_03_DE_BBBR667_2015-04-17_10-50-46-298536_k0.jpg",
+    "results\\inference_test_yolo11s_p2_nwd\\visualizations\\test_sample_04_DE_BBBR667_2015-04-17_10-50-46-968138_k0.jpg",
+    "results\\inference_test_yolo11s_p2_nwd\\visualizations\\test_sample_05_DE_BBBR667_2015-04-17_10-50-47-637099_k0.jpg",
+    "results\\inference_test_yolo11s_p2_nwd\\visualizations\\test_sample_06_DE_BBBR667_2015-04-17_10-50-48-301381_k0.jpg",
+    "results\\inference_test_yolo11s_p2_nwd\\visualizations\\test_sample_07_DE_BBBR667_2015-04-17_10-50-48-968440_k0.jpg",
+    "results\\inference_test_yolo11s_p2_nwd\\visualizations\\test_sample_08_DE_BBBR667_2015-04-17_10-50-49-635494_k0.jpg",
+    "results\\inference_test_yolo11s_p2_nwd\\visualizations\\test_sample_09_DE_BBBR667_2015-04-17_10-50-50-301694_k0.jpg",
+    "results\\inference_test_yolo11s_p2_nwd\\visualizations\\test_sample_10_DE_BBBR667_2015-04-17_10-50-50-969282_k0.jpg",
+    "results\\inference_test_yolo11s_p2_nwd\\visualizations\\test_sample_11_DE_BBBR667_2015-04-17_10-50-51-633439_k0.jpg",
+    "results\\inference_test_yolo11s_p2_nwd\\visualizations\\test_sample_12_DE_BBBR667_2015-04-17_10-59-09-437657_k0.jpg",
+    "results\\inference_test_yolo11s_p2_nwd\\visualizations\\test_sample_13_DE_BBBR667_2015-04-17_10-59-10-103427_k0.jpg",
+    "results\\inference_test_yolo11s_p2_nwd\\visualizations\\test_sample_14_DE_BBBR667_2015-04-17_10-59-10-770797_k0.jpg",
+    "results\\inference_test_yolo11s_p2_nwd\\visualizations\\test_sample_15_DE_BBBR667_2015-04-17_10-59-11-436799_k0.jpg",
+    "results\\inference_test_yolo11s_p2_nwd\\visualizations\\test_sample_16_DE_BBBR667_2015-04-17_10-59-12-102434_k0.jpg"
+  ]
+}

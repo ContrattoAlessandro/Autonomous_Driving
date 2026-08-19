@@ -17,6 +17,7 @@ from .matching import greedy_iou_match
 from .metrics import (
     binary_classification_metrics,
     compute_detection_and_attribute_map,
+    compute_granular_scale_metrics,
     multiclass_confusion_matrix,
     multiclass_metrics,
     multilabel_metrics,
@@ -34,6 +35,7 @@ def evaluate_validation_epoch(
     max_batches: int | None = None,
     conf_threshold: float = 0.05,
     iou_threshold: float = 0.6,
+    granular_scale_metrics: bool = False,
 ) -> dict[str, Any]:
     """Run validation pass, computing mAP, attributes, relevance metrics and composite score."""
 
@@ -70,6 +72,9 @@ def evaluate_validation_epoch(
 
     all_pred_maneuver: list[Sequence[float]] = []
     all_gt_maneuver: list[Sequence[int]] = []
+
+    total_gt_rel_red = 0
+    recalled_gt_rel_red = 0
 
     for batch_idx, raw_batch in enumerate(val_loader, 1):
         if max_batches is not None and batch_idx > max_batches:
@@ -207,6 +212,10 @@ def evaluate_validation_epoch(
                 tl_gt_mv = gt_mv[tl_mask]
                 tl_gt_rl = gt_rl[tl_mask]
 
+                # Count GT Relevant Red TLs (state 0 == red, relevance 1 == relevant)
+                rel_red_mask = (tl_gt_st == 0) & (tl_gt_rl == 1)
+                total_gt_rel_red += int(np.sum(rel_red_mask))
+
                 if (
                     len(tl_gt_boxes) > 0
                     and traffic_boxes is not None
@@ -239,12 +248,22 @@ def evaluate_validation_epoch(
                             gt_idx = m.target_index
 
                             # Relevance
+                            r_prob = None
                             if tl_gt_rl[gt_idx] >= 0 and relevance_logits is not None:
                                 r_prob = float(
                                     relevance_logits[b, 0, slot_idx].sigmoid().item()
                                 )
                                 all_pred_rel.append(r_prob)
                                 all_gt_rel.append(int(tl_gt_rl[gt_idx]))
+
+                            # Relevant Red Recall tracking
+                            if (
+                                tl_gt_st[gt_idx] == 0
+                                and tl_gt_rl[gt_idx] == 1
+                                and r_prob is not None
+                                and r_prob >= 0.5
+                            ):
+                                recalled_gt_rel_red += 1
 
                             # State
                             if 0 <= tl_gt_st[gt_idx] < 4 and state_logits is not None:
@@ -288,6 +307,13 @@ def evaluate_validation_epoch(
         pred_states_list,
         gt_states_list,
         image_shape=(int(img_h), int(img_w)),
+    )
+
+    # Relevant Red Recall
+    relevant_red_recall = (
+        float(recalled_gt_rel_red / total_gt_rel_red)
+        if total_gt_rel_red > 0
+        else 0.0
     )
 
     # Relevance metrics
@@ -352,7 +378,20 @@ def evaluate_validation_epoch(
         for name, val in loss_totals.items()
     }
 
-    return {
+    granular_res = None
+    if granular_scale_metrics:
+        granular_res = compute_granular_scale_metrics(
+            pred_boxes_list,
+            pred_scores_list,
+            pred_classes_list,
+            gt_boxes_list,
+            gt_classes_list,
+            target_class=0,
+            image_shape=(int(img_h), int(img_w)),
+            conf_threshold=conf_threshold,
+        )
+
+    out: dict[str, Any] = {
         "selection_score": selection_score,
         "mean_losses": mean_losses,
         "detection": det_map,
@@ -361,6 +400,7 @@ def evaluate_validation_epoch(
             "f1": relevance_f1,
             "precision": relevance_prec,
             "recall": relevance_rec,
+            "relevant_red_recall": relevant_red_recall,
         },
         "attributes": {
             "state_accuracy": state_acc,
@@ -370,3 +410,6 @@ def evaluate_validation_epoch(
         },
         "samples_evaluated": len(pred_boxes_list),
     }
+    if granular_res is not None:
+        out["granular_scale"] = granular_res
+    return out

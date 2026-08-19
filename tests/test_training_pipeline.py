@@ -24,6 +24,8 @@ from tlr_yolo_mtl.training.diagnostics import validate_smoke_context_batch
 from tlr_yolo_mtl.training.engine import (
     ExponentialMovingAverage,
     apply_training_overrides,
+    load_training_config,
+    parse_phases,
 )
 from tlr_yolo_mtl.training.losses import normalized_wasserstein_loss
 
@@ -265,6 +267,19 @@ class TrainingRuntimeTests(unittest.TestCase):
         for name in ema.shadow:
             self.assertTrue(torch.equal(restored.shadow[name], ema.shadow[name]))
 
+    def test_official_configs_are_single_phase_and_valid(self) -> None:
+        for config_rel in ("configs/tlr_yolo_mtl_train.yaml", "configs/tlr_yolov8s_train.yaml"):
+            config = load_training_config(config_rel)
+            phases = parse_phases(config)
+            self.assertEqual(len(phases), 1, f"{config_rel} should have exactly 1 phase")
+            self.assertEqual(phases[0].name, "joint_training_single_phase")
+            self.assertEqual(phases[0].epochs, 130)
+            self.assertTrue(phases[0].context_enabled)
+            self.assertFalse(phases[0].freeze_backbone)
+            self.assertFalse(phases[0].freeze_perception)
+            self.assertEqual(phases[0].relevance_perception_gradient_scale, 0.0)
+            self.assertEqual(phases[0].relevance_perception_gradient_scale_end, 1.0)
+
 
 class TrainingLossTests(unittest.TestCase):
     def test_nwd_is_zero_for_identical_boxes(self) -> None:
@@ -272,15 +287,19 @@ class TrainingLossTests(unittest.TestCase):
         loss = normalized_wasserstein_loss(boxes, boxes)
         self.assertLess(float(loss), 1e-4)
 
-    def test_nwd_increases_with_box_displacement(self) -> None:
-        target = torch.tensor([[0.0, 0.0, 4.0, 8.0]])
-        near = normalized_wasserstein_loss(
-            torch.tensor([[1.0, 0.0, 5.0, 8.0]]), target
-        )
-        far = normalized_wasserstein_loss(
-            torch.tensor([[8.0, 0.0, 12.0, 8.0]]), target
-        )
-        self.assertGreater(float(far), float(near))
+    def test_gradient_cosine_similarity(self) -> None:
+        # Verify gradient cosine computation between two loss objectives on a shared parameter
+        param = torch.nn.Parameter(torch.tensor([10.0, 10.0, 20.0, 20.0], requires_grad=True))
+        target = torch.tensor([12.0, 12.0, 22.0, 22.0])
+
+        loss1 = (param - target).square().sum()
+        loss2 = normalized_wasserstein_loss(param.unsqueeze(0), target.unsqueeze(0))
+
+        grad1 = torch.autograd.grad(loss1, [param], retain_graph=True)[0]
+        grad2 = torch.autograd.grad(loss2, [param], retain_graph=False)[0]
+
+        cos = (torch.dot(grad1, grad2) / (grad1.norm(2) * grad2.norm(2))).item()
+        self.assertGreater(cos, 0.9)  # Both losses pull in the same direction
 
 
 if __name__ == "__main__":

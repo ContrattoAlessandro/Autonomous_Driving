@@ -1,7 +1,7 @@
 # Metodologia corrente: detector unificato e cross-attention TL→arrow
 
 **Stato:** contratto canonico implementato  
-**Ultimo aggiornamento:** 17 agosto 2026
+**Ultimo aggiornamento:** 18 agosto 2026
 
 In caso di conflitto prevalgono, nell’ordine:
 
@@ -163,21 +163,33 @@ background che cadono in aree non supervisionabili.
 
 ## 6. Controllo dei gradienti e training
 
-Il training dura 130 epoche in tre fasi:
+Il training canonico dura 130 epoche in una **singola fase congiunta end-to-end** (`joint_training_single_phase`):
 
-| Fase | Epoche | Attention | Perception | Gradiente relevance→perception |
-|---|---:|---|---|---:|
-| `perception_and_local_relevance` | 30 | off | trainabile | 0 |
-| `cross_attention` | 20 | on | congelata | 0 |
-| `joint_finetuning` | 80 | on | trainabile | 0,25→1,00 sui TL |
+| Configurazione | Valore | Note |
+|---|---:|---|
+| Epoche totali | 130 | 100 optimizer step/epoca (3.200 img campionate/epoca) |
+| Perception (Backbone + Neck) | Trainabile | Warm-start COCO, LR iniziale `1e-4` |
+| Head & Cross-Attention | Trainabili | Attive fin dall'epoca 0, LR iniziale `1e-3` |
+| LR Scheduler | Coseno | `eta_min = 1e-6` unico e continuo su tutte le 130 epoche |
+| Gradiente relevance→perception | $0.0 \to 1.0$ | Warmup lineare continuo per stabilizzare i token iniziali |
+| Batch effettivo | 32 DTLD | Micro-batch 16 (accumulo 2) o micro-batch 4 (accumulo 8) |
 
 Sulle feature freccia il gradiente contestuale è inoltre moltiplicato per 0,25
 solo per record realmente paired. Il valore forward non cambia. Il batch
 effettivo è 32 DTLD; non esiste più una quota ATLAS/LISA.
 
-Il trainer conserva AdamW, AMP FP16, gradient clipping, EMA, accumulo e
-checkpoint atomici. Lo schema checkpoint v3 impedisce il resume accidentale
-dei checkpoint FiLM/doppio-detector.
+> [!NOTE]
+> **Superamento del training a 3 fasi**: La precedente strategia a 3 fasi
+> (`perception_and_local_relevance` $\to$ `cross_attention` $\to$ `joint_finetuning`)
+> introduceva congelamenti artificiali della perception (20 epoche) e discontinuità
+> nel learning rate scheduler. I confronti sperimentali hanno dimostrato che il
+> training congiunto a fase singola con warmup lineare dello scaling del gradiente
+> ($0.0 \to 1.0$) ottiene prestazioni equivalenti eliminando l'overhead e la complessità
+> multi-fase, risultando nella scelta metodologica ufficiale più pulita e riproducibile.
+
+Il trainer conserva AdamW, AMP FP16, gradient clipping (norm 10.0), EMA (0.9999),
+accumulo e checkpoint atomici. Lo schema checkpoint v3 impedisce il resume
+accidentale dei checkpoint FiLM/doppio-detector.
 
 ## 7. Inferenza, post-processing ed export
 

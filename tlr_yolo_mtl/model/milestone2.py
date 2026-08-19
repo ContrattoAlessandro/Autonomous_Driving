@@ -15,11 +15,12 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CONFIG = PROJECT_ROOT / "configs" / "model" / "tlr_yolo11n.yaml"
 INPUT_SIZE = (800, 1600)  # height, width
 EXPECTED_STRIDES = (8, 16, 32)
+ALLOWED_STRIDES = ((8, 16, 32), (4, 8, 16, 32))
 
 # Every supported scale preserves the official YOLO11 P3-P5 layer layout. COCO
 # tensors therefore transfer without index remapping; only the 80-class output
 # convolutions are shape-incompatible with the two-type target.
-TARGET_TO_SOURCE_LAYER = {index: index for index in range(24)}
+TARGET_TO_SOURCE_LAYER = {index: index for index in range(35)}
 
 
 def configure_ultralytics(project_root: Path = PROJECT_ROOT) -> Path:
@@ -45,7 +46,7 @@ def _runtime() -> tuple[Any, Any, str]:
 
 
 def build_detection_model(config: str | Path = DEFAULT_CONFIG) -> Any:
-    """Build the two-type standard YOLO11 P3-P5 detection model."""
+    """Build the two-type YOLO11 detection model (P3-P5 or P2-P5)."""
 
     _, YOLO, _ = _runtime()
     config_path = Path(config).resolve()
@@ -54,7 +55,7 @@ def build_detection_model(config: str | Path = DEFAULT_CONFIG) -> Any:
     wrapper = YOLO(str(config_path), task="detect", verbose=False)
     detect = wrapper.model.model[-1]
     strides = tuple(int(value) for value in detect.stride.tolist())
-    if strides != EXPECTED_STRIDES:
+    if strides not in ALLOWED_STRIDES:
         raise ValueError(f"unexpected detection strides: {strides}")
     if int(detect.nc) != 2 or int(detect.reg_max) != 16:
         raise ValueError(
@@ -143,6 +144,9 @@ def load_coco_warmstart(target: Any, weights: str | Path) -> dict[str, Any]:
             region_counts["detect_p3_p5"] += 1
         else:
             region_counts["neck_p3_p5"] += 1
+    detect = target_model.model[-1]
+    is_p2 = hasattr(detect, "stride") and len(detect.stride) == 4
+    pyramid_levels = ["P2", "P3", "P4", "P5"] if is_p2 else ["P3", "P4", "P5"]
     return {
         "weights": str(weights_path),
         "loaded_state_items": len(loaded),
@@ -150,8 +154,8 @@ def load_coco_warmstart(target: Any, weights: str | Path) -> dict[str, Any]:
         "target_parameters": total_parameters,
         "loaded_fraction": loaded_parameters / total_parameters,
         "loaded_state_items_by_region": region_counts,
-        "pyramid_levels": ["P3", "P4", "P5"],
-        "p2_enabled": False,
+        "pyramid_levels": pyramid_levels,
+        "p2_enabled": is_p2,
         "type_output_initialized_randomly": not any(
             key.endswith(".cv3.0.2.weight")
             or key.endswith(".cv3.1.2.weight")
@@ -213,19 +217,19 @@ def run_forward_smoke(
         handle.remove()
 
     strides = tuple(int(value) for value in detect.stride.tolist())
+    if strides not in ALLOWED_STRIDES:
+        raise AssertionError(f"expected strides in {ALLOWED_STRIDES}, got {strides}")
     expected_shapes = [
         [1, captured[index][1], height // stride, width // stride]
-        for index, stride in enumerate(EXPECTED_STRIDES)
-    ] if len(captured) == len(EXPECTED_STRIDES) else []
-    if strides != EXPECTED_STRIDES:
-        raise AssertionError(f"expected strides {EXPECTED_STRIDES}, got {strides}")
+        for index, stride in enumerate(strides)
+    ] if len(captured) == len(strides) else []
     if captured != expected_shapes:
         raise AssertionError(
             f"unexpected pyramid shapes: captured={captured}, expected={expected_shapes}"
         )
 
     expected_locations = sum(
-        (height // stride) * (width // stride) for stride in EXPECTED_STRIDES
+        (height // stride) * (width // stride) for stride in strides
     )
     prediction_shape = _prediction_shape(output, torch)
     if prediction_shape is not None and prediction_shape[-1] != expected_locations:

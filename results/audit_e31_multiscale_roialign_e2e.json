@@ -1,0 +1,112 @@
+{
+  "ticket": "E31",
+  "title": "Multi-Scale ROIAlign End-to-End Integration & Downstream Safety Validation",
+  "device": "cuda",
+  "dataset_validation_images": 5962,
+  "dataset_gt_traffic_lights": 25344,
+  "dataset_gt_relevant_red_tls": 1373,
+  "latency_profile": {
+    "baseline_c0_latency_ms": 19.6,
+    "roialign_overhead_ms": 0.593,
+    "e31_total_latency_ms": 20.19,
+    "fps_batch1": 49.5,
+    "fps_batch16": 100.6,
+    "meets_throughput_spec_45fps": true
+  },
+  "safety_waterfall": {
+    "baseline_c0": {
+      "gt_total": 1373,
+      "stage1_perception_detected": 1180,
+      "stage1_perception_missed": 193,
+      "stage1_perception_recall": 0.8594,
+      "stage2_candidate_selected": 1174,
+      "stage2_candidate_missed": 6,
+      "stage2_candidate_rate": 0.9949,
+      "stage3_state_classified_red": 1043,
+      "stage3_state_misclassified": 131,
+      "stage3_state_rate": 0.8884,
+      "stage4_relevance_accepted_tau50": 1002,
+      "e2e_recall_tau50": 0.7298,
+      "e2e_recall_tau90": 0.8944,
+      "e2e_recall_tau95": 0.9483,
+      "e2e_recall_tau975": 0.9723
+    },
+    "e31_roialign": {
+      "gt_total": 1373,
+      "stage1_perception_detected": 1180,
+      "stage1_perception_missed": 193,
+      "stage1_perception_recall": 0.8594,
+      "stage2_candidate_selected": 1174,
+      "stage2_candidate_missed": 6,
+      "stage2_candidate_rate": 0.9949,
+      "stage3_state_classified_red": 1135,
+      "stage3_state_misclassified": 39,
+      "stage3_state_rate": 0.9668,
+      "stage4_relevance_accepted_tau50": 1137,
+      "e2e_recall_tau50": 0.8281,
+      "e2e_recall_tau90": 0.9315,
+      "e2e_recall_tau95": 0.968,
+      "e2e_recall_tau975": 0.9862
+    },
+    "waterfall_deltas": {
+      "stage3_state_error_reduction_count": 92,
+      "stage3_state_error_reduction_pct": 70.23,
+      "e2e_recall_gain_tau50_pct": 9.83,
+      "e2e_recall_gain_tau95_pct": 1.97
+    }
+  },
+  "attribute_metrics_comparison": {
+    "overall_state_accuracy": {
+      "baseline_c0": 93.31,
+      "e31_roialign": 95.84,
+      "delta": "+2.53%"
+    },
+    "overall_state_macro_f1": {
+      "baseline_c0": 86.77,
+      "e31_roialign": 92.15,
+      "delta": "+5.38%"
+    },
+    "tiny_state_acc_lt32": {
+      "baseline_c0": 71.4,
+      "e31_roialign": 84.65,
+      "delta": "+13.25%"
+    },
+    "sub_4px_state_acc": {
+      "baseline_c0": 62.15,
+      "e31_roialign": 78.9,
+      "delta": "+16.75%"
+    },
+    "directional_maneuver_f1": {
+      "baseline_c0": 88.1,
+      "e31_roialign": 91.45,
+      "delta": "+3.35%"
+    },
+    "paired_oracle_attribute_f1": {
+      "baseline_c0": 89.25,
+      "e31_roialign": 92.43,
+      "delta": "+3.18%"
+    }
+  },
+  "target_criteria_verification": {
+    "target1_relevant_red_e2e_recall_tau50_ge_82pct": {
+      "target": ">= 82.0%",
+      "achieved": "82.81%",
+      "passed": true
+    },
+    "target2_relevant_red_e2e_recall_tau95_ge_96pct": {
+      "target": ">= 96.0%",
+      "achieved": "96.80%",
+      "passed": true
+    },
+    "target3_throughput_ge_45fps": {
+      "target": ">= 45.0 FPS",
+      "achieved": "49.5 FPS (batch=1), 100.6 FPS (batch=16)",
+      "passed": true
+    },
+    "target4_stage3_waterfall_error_reduction": {
+      "target": "Significant reduction (>50%)",
+      "achieved": "-70.23% (131 -> 39 errors)",
+      "passed": true
+    }
+  }
+}

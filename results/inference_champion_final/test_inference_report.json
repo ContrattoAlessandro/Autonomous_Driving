@@ -1,0 +1,63 @@
+{
+  "schema": "TLR-YOLO-MTL Test Inference and Postprocessing Report v1",
+  "checkpoint": "runs\\tlr_yolo11s_champion_final\\weights\\best_composite.pt",
+  "split": "val",
+  "samples_evaluated": 5962,
+  "eval_time_seconds": 159.83715915679932,
+  "throughput_fps": 37.30046274252981,
+  "postprocessing_config": {
+    "confidence_threshold": 0.25,
+    "iou_threshold": 0.45
+  },
+  "composite_selection_score": 0.7969622421249554,
+  "detection_metrics": {
+    "map50": 0.8473488111632663,
+    "map50_95": 0.6261095814958954,
+    "ap_tl_50": 0.7470529218558128,
+    "ap_arrow_50": 0.9476447004707199,
+    "ap_small": 0.7116830153130826,
+    "ap_medium": 0.9466859449902496,
+    "map_state": 0.5425770243243103
+  },
+  "relevance_metrics": {
+    "auprc": 0.9110862353586852,
+    "f1": 0.8550547117426098,
+    "precision": 0.8370103916866507,
+    "recall": 0.8738941745952262,
+    "relevant_red_recall": 0.7482365708084645
+  },
+  "attribute_metrics": {
+    "state_accuracy": 0.9414127096621782,
+    "state_macro_f1": 0.8392038016546418,
+    "round_f1": 0.889670301309762,
+    "maneuver_macro_f1": 0.4346323759015915
+  },
+  "validation_losses": {
+    "total": 25.978916988935293,
+    "detection": 25.540740530868,
+    "state": 0.14352652779331676,
+    "round": 0.15630323874037563,
+    "maneuver": 0.06228406877951677,
+    "ego_lane": 0.13413715087896058,
+    "relevance": 0.11532291384094243,
+    "nwd": 0.14954594817841502
+  },
+  "visualizations": [
+    "results\\inference_champion_final\\visualizations\\test_sample_01_DE_BBBR667_2015-04-17_10-50-44-969603_k0.jpg",
+    "results\\inference_champion_final\\visualizations\\test_sample_02_DE_BBBR667_2015-04-17_10-50-45-633408_k0.jpg",
+    "results\\inference_champion_final\\visualizations\\test_sample_03_DE_BBBR667_2015-04-17_10-50-46-298536_k0.jpg",
+    "results\\inference_champion_final\\visualizations\\test_sample_04_DE_BBBR667_2015-04-17_10-50-46-968138_k0.jpg",
+    "results\\inference_champion_final\\visualizations\\test_sample_05_DE_BBBR667_2015-04-17_10-50-47-637099_k0.jpg",
+    "results\\inference_champion_final\\visualizations\\test_sample_06_DE_BBBR667_2015-04-17_10-50-48-301381_k0.jpg",
+    "results\\inference_champion_final\\visualizations\\test_sample_07_DE_BBBR667_2015-04-17_10-50-48-968440_k0.jpg",
+    "results\\inference_champion_final\\visualizations\\test_sample_08_DE_BBBR667_2015-04-17_10-50-49-635494_k0.jpg",
+    "results\\inference_champion_final\\visualizations\\test_sample_09_DE_BBBR667_2015-04-17_10-50-50-301694_k0.jpg",
+    "results\\inference_champion_final\\visualizations\\test_sample_10_DE_BBBR667_2015-04-17_10-50-50-969282_k0.jpg",
+    "results\\inference_champion_final\\visualizations\\test_sample_11_DE_BBBR667_2015-04-17_10-50-51-633439_k0.jpg",
+    "results\\inference_champion_final\\visualizations\\test_sample_12_DE_BBBR667_2015-04-17_10-59-09-437657_k0.jpg",
+    "results\\inference_champion_final\\visualizations\\test_sample_13_DE_BBBR667_2015-04-17_10-59-10-103427_k0.jpg",
+    "results\\inference_champion_final\\visualizations\\test_sample_14_DE_BBBR667_2015-04-17_10-59-10-770797_k0.jpg",
+    "results\\inference_champion_final\\visualizations\\test_sample_15_DE_BBBR667_2015-04-17_10-59-11-436799_k0.jpg",
+    "results\\inference_champion_final\\visualizations\\test_sample_16_DE_BBBR667_2015-04-17_10-59-12-102434_k0.jpg"
+  ]
+}

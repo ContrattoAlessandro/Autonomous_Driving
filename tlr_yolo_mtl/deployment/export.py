@@ -72,7 +72,12 @@ def build_full_model(
         payload = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
         saved_config = payload.get("config", {}) if isinstance(payload, dict) else {}
         if isinstance(saved_config, dict):
-            head_config = UnifiedHeadConfig(**saved_config.get("architecture", {}))
+            arch = saved_config.get("architecture", {})
+            head_kwargs = {
+                k: v for k, v in arch.items()
+                if k in UnifiedHeadConfig.__dataclass_fields__
+            }
+            head_config = UnifiedHeadConfig(**head_kwargs)
     wrapper = build_detection_model()
     warmstart = load_coco_warmstart(wrapper, weights_path)
     attach_unified_relevance_head(wrapper, config=head_config)

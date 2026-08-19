@@ -1,0 +1,300 @@
+{
+  "schema": "TLR-YOLO-MTL Dataset Distributions & Prior Audit v1",
+  "resolution": "800x1600",
+  "train": {
+    "num_images": 22563,
+    "total_tls": 104103,
+    "total_arrows": 25466,
+    "tls_per_image": {
+      "0": 71,
+      "1": 1435,
+      "2": 3314,
+      "3": 4376,
+      "4": 13367
+    },
+    "arrows_per_image": {
+      "0": 11660,
+      "1": 3748,
+      "2": 3471,
+      "3": 1740,
+      "4": 1944
+    },
+    "geometry": {
+      "tl_width_mean": 8.8,
+      "tl_height_mean": 27.62,
+      "tl_area_mean": 374.33,
+      "tl_area_median": 146.48,
+      "tl_area_p5": 9.77,
+      "tl_area_p95": 1589.36,
+      "tl_aspect_ratio_mean": 3.55,
+      "area_buckets": {
+        "<32 px\u00b2": {
+          "count": 19592,
+          "pct": 18.82
+        },
+        "32-64 px\u00b2": {
+          "count": 11512,
+          "pct": 11.06
+        },
+        "64-128 px\u00b2": {
+          "count": 17190,
+          "pct": 16.51
+        },
+        "128-256 px\u00b2": {
+          "count": 18523,
+          "pct": 17.79
+        },
+        "256-512 px\u00b2": {
+          "count": 16515,
+          "pct": 15.86
+        },
+        ">512 px\u00b2": {
+          "count": 20771,
+          "pct": 19.95
+        }
+      },
+      "min_side_buckets": {
+        "<4 px": {
+          "count": 31804,
+          "pct": 30.55
+        },
+        "4-6 px": {
+          "count": 14106,
+          "pct": 13.55
+        },
+        "6-8 px": {
+          "count": 16852,
+          "pct": 16.19
+        },
+        "8-12 px": {
+          "count": 17586,
+          "pct": 16.89
+        },
+        ">12 px": {
+          "count": 23755,
+          "pct": 22.82
+        }
+      }
+    },
+    "semantics": {
+      "relevance": {
+        "relevant": 48327,
+        "irrelevant": 55776,
+        "p_relevant": 0.4642
+      },
+      "states": {
+        "green": 45258,
+        "off": 8227,
+        "red": 30179,
+        "yellow": 3105
+      },
+      "round": {
+        "round_1": 71274,
+        "directional_0": 15057,
+        "p_round": 0.8256
+      },
+      "maneuvers": {
+        "(0, 1, 0)": 4720,
+        "(1, 0, 0)": 9122,
+        "(0, 0, 1)": 1133,
+        "(1, 1, 0)": 82
+      }
+    },
+    "conditionals": {
+      "p_rel_given_arrow": 0.4363,
+      "p_rel_given_no_arrow": 0.4972,
+      "p_rel_by_area_bucket": {
+        "<32 px\u00b2": {
+          "total_tls": 19592,
+          "relevant_tls": 1107,
+          "p_rel": 0.0565
+        },
+        "32-64 px\u00b2": {
+          "total_tls": 11512,
+          "relevant_tls": 2927,
+          "p_rel": 0.2543
+        },
+        "64-128 px\u00b2": {
+          "total_tls": 17190,
+          "relevant_tls": 7791,
+          "p_rel": 0.4532
+        },
+        "128-256 px\u00b2": {
+          "total_tls": 18523,
+          "relevant_tls": 10263,
+          "p_rel": 0.5541
+        },
+        "256-512 px\u00b2": {
+          "total_tls": 16515,
+          "relevant_tls": 10648,
+          "p_rel": 0.6447
+        },
+        ">512 px\u00b2": {
+          "total_tls": 20771,
+          "relevant_tls": 15591,
+          "p_rel": 0.7506
+        }
+      },
+      "state_given_rel1": {
+        "green": 31529,
+        "off": 1506,
+        "red": 12522,
+        "yellow": 1407
+      },
+      "state_given_rel0": {
+        "off": 6721,
+        "red": 17657,
+        "green": 13729,
+        "yellow": 1698
+      }
+    }
+  },
+  "val": {
+    "num_images": 5962,
+    "total_tls": 25344,
+    "total_arrows": 6062,
+    "tls_per_image": {
+      "0": 11,
+      "1": 394,
+      "2": 1050,
+      "3": 1287,
+      "4": 3220
+    },
+    "arrows_per_image": {
+      "0": 3195,
+      "1": 1140,
+      "2": 812,
+      "3": 362,
+      "4": 453
+    },
+    "geometry": {
+      "tl_width_mean": 9.16,
+      "tl_height_mean": 28.76,
+      "tl_area_mean": 401.71,
+      "tl_area_median": 156.25,
+      "tl_area_p5": 10.99,
+      "tl_area_p95": 1721.8,
+      "tl_aspect_ratio_mean": 3.54,
+      "area_buckets": {
+        "<32 px\u00b2": {
+          "count": 3980,
+          "pct": 15.7
+        },
+        "32-64 px\u00b2": {
+          "count": 2817,
+          "pct": 11.12
+        },
+        "64-128 px\u00b2": {
+          "count": 4452,
+          "pct": 17.57
+        },
+        "128-256 px\u00b2": {
+          "count": 4699,
+          "pct": 18.54
+        },
+        "256-512 px\u00b2": {
+          "count": 4015,
+          "pct": 15.84
+        },
+        ">512 px\u00b2": {
+          "count": 5381,
+          "pct": 21.23
+        }
+      },
+      "min_side_buckets": {
+        "<4 px": {
+          "count": 7150,
+          "pct": 28.21
+        },
+        "4-6 px": {
+          "count": 3506,
+          "pct": 13.83
+        },
+        "6-8 px": {
+          "count": 4230,
+          "pct": 16.69
+        },
+        "8-12 px": {
+          "count": 4396,
+          "pct": 17.35
+        },
+        ">12 px": {
+          "count": 6062,
+          "pct": 23.92
+        }
+      }
+    },
+    "semantics": {
+      "relevance": {
+        "relevant": 12523,
+        "irrelevant": 12821,
+        "p_relevant": 0.4941
+      },
+      "states": {
+        "green": 10321,
+        "red": 8350,
+        "off": 1817,
+        "yellow": 934
+      },
+      "round": {
+        "round_1": 17684,
+        "directional_0": 3757,
+        "p_round": 0.8248
+      },
+      "maneuvers": {
+        "(0, 0, 1)": 308,
+        "(0, 1, 0)": 1122,
+        "(1, 0, 0)": 2275,
+        "(1, 1, 0)": 52
+      }
+    },
+    "conditionals": {
+      "p_rel_given_arrow": 0.4629,
+      "p_rel_given_no_arrow": 0.528,
+      "p_rel_by_area_bucket": {
+        "<32 px\u00b2": {
+          "total_tls": 3980,
+          "relevant_tls": 272,
+          "p_rel": 0.0683
+        },
+        "32-64 px\u00b2": {
+          "total_tls": 2817,
+          "relevant_tls": 725,
+          "p_rel": 0.2574
+        },
+        "64-128 px\u00b2": {
+          "total_tls": 4452,
+          "relevant_tls": 2000,
+          "p_rel": 0.4492
+        },
+        "128-256 px\u00b2": {
+          "total_tls": 4699,
+          "relevant_tls": 2670,
+          "p_rel": 0.5682
+        },
+        "256-512 px\u00b2": {
+          "total_tls": 4015,
+          "relevant_tls": 2706,
+          "p_rel": 0.674
+        },
+        ">512 px\u00b2": {
+          "total_tls": 5381,
+          "relevant_tls": 4150,
+          "p_rel": 0.7712
+        }
+      },
+      "state_given_rel1": {
+        "green": 7741,
+        "off": 278,
+        "red": 3686,
+        "yellow": 519
+      },
+      "state_given_rel0": {
+        "red": 4664,
+        "green": 2580,
+        "off": 1539,
+        "yellow": 415
+      }
+    }
+  }
+}

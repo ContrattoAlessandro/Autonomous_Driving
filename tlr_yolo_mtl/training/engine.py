@@ -1,4 +1,4 @@
-"""Three-phase, accumulation-based training for unified TL/arrow perception."""
+"""Single-phase end-to-end and schedule-based training for unified TL/arrow perception."""
 
 from __future__ import annotations
 
@@ -68,12 +68,10 @@ def load_training_config(path: str | Path) -> dict[str, Any]:
 
 
 def _validate_training_config(config: Mapping[str, Any]) -> None:
-    if bool(config.get("p2_enabled", False)):
-        raise ValueError("P2 is excluded from the active resource-bounded pipeline")
     if not str(config.get("model_variant", "")).strip():
         raise ValueError("model_variant must identify the active model scale")
     if not str(config.get("model_config", "")).strip():
-        raise ValueError("model_config must select an active P3-P5 model YAML")
+        raise ValueError("model_config must select an active model YAML")
     if not str(config.get("warmstart_weights", "")).strip():
         raise ValueError("warmstart_weights must select matching weights")
     input_size = tuple(config.get("input_size", ()))
@@ -107,7 +105,11 @@ def _validate_training_config(config: Mapping[str, Any]) -> None:
         raise ValueError("the active unified architecture is DTLD-only")
     architecture = config.get("architecture", {})
     if architecture:
-        UnifiedHeadConfig(**architecture).validate()
+        head_kwargs = {
+            k: v for k, v in architecture.items()
+            if k in UnifiedHeadConfig.__dataclass_fields__
+        }
+        UnifiedHeadConfig(**head_kwargs).validate()
     for phase in config.get("phases", ()):
         start = float(phase.get("relevance_perception_gradient_scale", 0.0))
         end = float(phase.get("relevance_perception_gradient_scale_end", start))
@@ -154,11 +156,12 @@ def parse_phases(config: Mapping[str, Any]) -> list[PhaseSpec]:
     return phases
 
 
-def assert_active_pyramid(model: nn.Module) -> None:
+def assert_active_pyramid(model: nn.Module, *, p2_enabled: bool = False) -> None:
     head = model.model[-1]
     strides = tuple(int(value) for value in head.stride.tolist())
-    if strides != (8, 16, 32):
-        raise AssertionError(f"active training requires P3-P5 strides, got {strides}")
+    expected = (4, 8, 16, 32) if (p2_enabled or len(strides) == 4) else (8, 16, 32)
+    if strides != expected:
+        raise AssertionError(f"active training requires {expected} strides, got {strides}")
 
 
 def configure_phase(model: nn.Module, phase: PhaseSpec, wrapper: Any) -> None:
@@ -247,6 +250,81 @@ def build_adamw(
     return torch.optim.AdamW(parameter_groups, betas=(0.9, 0.999))
 
 
+def compute_module_gradient_norms(model: nn.Module) -> dict[str, float]:
+    """Compute Frobenius gradient norms for functional submodules."""
+
+    categories: dict[str, list[torch.Tensor]] = {
+        "backbone": [],
+        "neck": [],
+        "detect": [],
+        "attributes": [],
+        "cross_attention": [],
+        "relevance": [],
+    }
+    inner_model = getattr(model, "model", None)
+    final_index = len(inner_model) - 1 if inner_model is not None else -1
+    backbone_end = 10
+    if inner_model is not None:
+        for idx, mod in enumerate(inner_model):
+            if "Upsample" in type(mod).__name__:
+                backbone_end = idx - 1
+                break
+
+    for name, param in model.named_parameters():
+        if param.grad is None:
+            continue
+        grad = param.grad.detach()
+        if "model." in name:
+            fields = name.split(".")
+            idx = -1
+            for f in fields:
+                if f.isdigit():
+                    idx = int(f)
+                    break
+            if 0 <= idx <= backbone_end:
+                categories["backbone"].append(grad)
+            elif backbone_end < idx < final_index:
+                categories["neck"].append(grad)
+            elif idx == final_index:
+                if any(
+                    attr in name
+                    for attr in (
+                        "state_heads",
+                        "round_heads",
+                        "maneuver_heads",
+                        "ego_lane_heads",
+                    )
+                ):
+                    categories["attributes"].append(grad)
+                elif any(
+                    ctx in name
+                    for ctx in (
+                        "cross_attention",
+                        "token_projection",
+                        "traffic_token",
+                        "arrow_token",
+                    )
+                ):
+                    categories["cross_attention"].append(grad)
+                elif "relevance" in name:
+                    categories["relevance"].append(grad)
+                else:
+                    categories["detect"].append(grad)
+            else:
+                categories["detect"].append(grad)
+        else:
+            categories["detect"].append(grad)
+
+    norms: dict[str, float] = {}
+    for cat_name, grads in categories.items():
+        if grads:
+            total_norm_sq = sum(float(g.float().norm(2).item() ** 2) for g in grads)
+            norms[cat_name] = round(math.sqrt(total_norm_sq), 4)
+        else:
+            norms[cat_name] = 0.0
+    return norms
+
+
 class ExponentialMovingAverage:
     """Small state-dict EMA kept on the model device for affordable updates."""
 
@@ -312,6 +390,8 @@ def build_multitask_criterion(
     model: nn.Module, config: Mapping[str, Any]
 ) -> TLRMultiTaskCriterion:
     loss = config["loss"]
+    tal_assigner_cfg = config.get("tal_assigner", {})
+    tal_assigner_type = tal_assigner_cfg.get("type", "standard") if isinstance(tal_assigner_cfg, Mapping) else "standard"
     return TLRMultiTaskCriterion(
         model,
         weights=_loss_weights(config),
@@ -320,7 +400,10 @@ def build_multitask_criterion(
         ego_lane_gamma=float(loss["ego_lane_focal_gamma"]),
         relevance_gamma=float(loss["relevance_focal_gamma"]),
         nwd_constant=float(loss["nwd_constant"]),
+        tal_assigner_type=tal_assigner_type,
+        tal_assigner_config=tal_assigner_cfg if isinstance(tal_assigner_cfg, Mapping) and tal_assigner_cfg else None,
     )
+
 
 
 _LOSS_COMPONENT_NAMES = (
@@ -392,11 +475,18 @@ def build_training_components(
     wrapper = build_detection_model(config["model_config"])
     if weights_path is not None:
         load_coco_warmstart(wrapper, weights_path)
+    arch = config.get("architecture", {})
+    head_kwargs = {
+        k: v for k, v in arch.items()
+        if k in UnifiedHeadConfig.__dataclass_fields__
+    }
     attach_unified_relevance_head(
         wrapper,
-        config=UnifiedHeadConfig(**config.get("architecture", {})),
+        config=UnifiedHeadConfig(**head_kwargs),
     )
-    assert_active_pyramid(wrapper.model)
+    assert_active_pyramid(
+        wrapper.model, p2_enabled=bool(config.get("p2_enabled", False))
+    )
 
     resolved_size = target_size or tuple(int(value) for value in config["input_size"])
     dataset = CanonicalMultiTaskDataset(
@@ -519,6 +609,7 @@ _RESUME_CONTRACT_KEYS = (
     "architecture",
     "loss_weights",
     "loss",
+    "tal_assigner",
     "phases",
 )
 
@@ -590,7 +681,7 @@ def train_from_config(
     val_steps_per_epoch: int | None = None,
     skip_validation: bool = False,
 ) -> dict[str, Any]:
-    """Execute the four phases with safe runtime overrides and epoch resume."""
+    """Execute the configured training schedule with safe runtime overrides and epoch resume."""
 
     base_config = load_training_config(config_path)
     resume_path: Path | None = None
@@ -656,6 +747,8 @@ def train_from_config(
         raise RuntimeError("CUDA training was requested but is unavailable")
     if resolved_device.type == "cuda":
         torch.backends.cudnn.benchmark = True
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
 
     output = Path(output_dir).resolve()
     existing_last = output / "weights" / "last.pt"
@@ -714,8 +807,29 @@ def train_from_config(
     global_epoch = int(resume["global_epoch"]) + 1 if resume is not None else 0
     best_val_score = (
         float(resume.get("best_val_score", -float("inf")))
-        if resume is not None
+        if resume is not None and resume.get("best_val_score") is not None
         else -float("inf")
+    )
+    best_tl_det_score = (
+        float(resume.get("best_tl_det_score", -float("inf")))
+        if resume is not None and resume.get("best_tl_det_score") is not None
+        else -float("inf")
+    )
+    best_relevance_score = (
+        float(resume.get("best_relevance_score", -float("inf")))
+        if resume is not None and resume.get("best_relevance_score") is not None
+        else -float("inf")
+    )
+    best_relevant_red_score = (
+        float(resume.get("best_relevant_red_score", -float("inf")))
+        if resume is not None and resume.get("best_relevant_red_score") is not None
+        else -float("inf")
+    )
+    amp_overflow_count = (
+        int(resume.get("amp_overflow_count", 0)) if resume is not None else 0
+    )
+    grad_clipped_count = (
+        int(resume.get("grad_clipped_count", 0)) if resume is not None else 0
     )
     resume_phase_index = -1
     resume_phase_epoch = -1
@@ -835,7 +949,7 @@ def train_from_config(
 
                     if micro_step % accumulation == 0:
                         scaler.unscale_(optimizer)
-                        gradient_norm = torch.nn.utils.clip_grad_norm_(
+                        raw_grad_norm = torch.nn.utils.clip_grad_norm_(
                             [
                                 parameter
                                 for parameter in model.parameters()
@@ -843,6 +957,17 @@ def train_from_config(
                             ],
                             float(config["gradient_clip_norm"]),
                         )
+                        finite_gradient_norm = bool(torch.isfinite(raw_grad_norm))
+                        if finite_gradient_norm and float(raw_grad_norm) > float(
+                            config["gradient_clip_norm"]
+                        ):
+                            grad_clipped_count += 1
+                        module_grad_norms = (
+                            compute_module_gradient_norms(model)
+                            if finite_gradient_norm
+                            else {}
+                        )
+
                         amp_scale_before = float(scaler.get_scale())
                         scaler.step(optimizer)
                         scaler.update()
@@ -851,11 +976,12 @@ def train_from_config(
                         step_applied = (
                             not amp_enabled or amp_scale_after >= amp_scale_before
                         )
+                        if not step_applied:
+                            amp_overflow_count += 1
                         if step_applied:
                             scheduler.step()
                             ema.update(model)
                             optimizer_steps += 1
-                        finite_gradient_norm = bool(torch.isfinite(gradient_norm))
                         event = {
                             "phase": phase.name,
                             "epoch": global_epoch,
@@ -863,14 +989,19 @@ def train_from_config(
                             "optimizer_step_applied": step_applied,
                             "amp_scale_before": amp_scale_before,
                             "amp_scale_after": amp_scale_after,
+                            "amp_overflow_count": amp_overflow_count,
+                            "grad_clipped_rate": round(
+                                grad_clipped_count / max(1, optimizer_steps), 4
+                            ),
                             "mean_micro_loss": window_loss / window_micro_steps,
                             "mean_loss_components": {
                                 name: value / window_micro_steps
                                 for name, value in window_loss_components.items()
                             },
                             "gradient_norm": (
-                                float(gradient_norm) if finite_gradient_norm else None
+                                float(raw_grad_norm) if finite_gradient_norm else None
                             ),
+                            "module_gradient_norms": module_grad_norms,
                             "learning_rates": [
                                 float(group["lr"]) for group in optimizer.param_groups
                             ],
@@ -886,7 +1017,7 @@ def train_from_config(
                         ):
                             status = "train" if step_applied else "amp-overflow"
                             norm_text = (
-                                f"{float(gradient_norm):.3f}"
+                                f"{float(raw_grad_norm):.3f}"
                                 if finite_gradient_norm
                                 else "non-finite"
                             )
@@ -929,7 +1060,24 @@ def train_from_config(
                     "micro_steps_completed": micro_steps,
                     "epoch_complete": epoch_complete,
                     "full_schedule": only_phases is None,
-                    "best_val_score": best_val_score if math.isfinite(best_val_score) else None,
+                    "best_val_score": (
+                        best_val_score if math.isfinite(best_val_score) else None
+                    ),
+                    "best_tl_det_score": (
+                        best_tl_det_score if math.isfinite(best_tl_det_score) else None
+                    ),
+                    "best_relevance_score": (
+                        best_relevance_score
+                        if math.isfinite(best_relevance_score)
+                        else None
+                    ),
+                    "best_relevant_red_score": (
+                        best_relevant_red_score
+                        if math.isfinite(best_relevant_red_score)
+                        else None
+                    ),
+                    "amp_overflow_count": amp_overflow_count,
+                    "grad_clipped_count": grad_clipped_count,
                     "rng_state": _capture_rng_state(),
                     "config": config,
                 }
@@ -973,18 +1121,71 @@ def train_from_config(
                     rel = val_res["relevance"]
                     att = val_res["attributes"]
                     v_loss = val_res["mean_losses"]
-                    score = val_res["selection_score"]
+                    score = float(val_res["selection_score"])
+                    tl_det_score = float(det.get("ap_tl_50", det.get("map50", 0.0)))
+                    rel_score = float(rel.get("auprc", 0.0))
+                    rel_red_score = float(rel.get("relevant_red_recall", 0.0))
+
                     is_best = score > best_val_score
                     if is_best:
                         best_val_score = score
-                    best_tag = "★ [BEST] Nuovo checkpoint migliore salvato in weights/best.pt" if is_best else ""
+                        best_checkpoint = dict(checkpoint)
+                        best_checkpoint["best_val_score"] = best_val_score
+                        best_checkpoint["val_metrics"] = val_res
+                        _atomic_checkpoint(output / "weights" / "best.pt", best_checkpoint)
+                        _atomic_checkpoint(
+                            output / "weights" / "best_composite.pt", best_checkpoint
+                        )
+
+                    if tl_det_score > best_tl_det_score:
+                        best_tl_det_score = tl_det_score
+                        ckpt_det = dict(checkpoint)
+                        ckpt_det["best_tl_det_score"] = best_tl_det_score
+                        ckpt_det["val_metrics"] = val_res
+                        _atomic_checkpoint(
+                            output / "weights" / "best_tl_detection.pt", ckpt_det
+                        )
+
+                    if rel_score > best_relevance_score:
+                        best_relevance_score = rel_score
+                        ckpt_rel = dict(checkpoint)
+                        ckpt_rel["best_relevance_score"] = best_relevance_score
+                        ckpt_rel["val_metrics"] = val_res
+                        _atomic_checkpoint(
+                            output / "weights" / "best_relevance.pt", ckpt_rel
+                        )
+
+                    if rel_red_score > best_relevant_red_score:
+                        best_relevant_red_score = rel_red_score
+                        ckpt_rrr = dict(checkpoint)
+                        ckpt_rrr["best_relevant_red_score"] = best_relevant_red_score
+                        ckpt_rrr["val_metrics"] = val_res
+                        _atomic_checkpoint(
+                            output / "weights" / "best_relevant_red_recall.pt", ckpt_rrr
+                        )
+
+                    best_tag = (
+                        "★ [BEST COMPOSITE] Nuovo checkpoint migliore salvato in weights/best.pt"
+                        if is_best
+                        else ""
+                    )
 
                     print("=" * 82)
-                    print(f"[VAL] Epoch {epoch + 1}/{phase.epochs} ({phase.name}) | Global Epoch {global_epoch + 1}")
-                    print(f"      Val Loss: {v_loss['total']:.4f} (Det: {v_loss['detection']:.3f} | State: {v_loss['state']:.3f} | Rel: {v_loss['relevance']:.3f} | NWD: {v_loss['nwd']:.3f})")
-                    print(f"      Detection: mAP50 = {det['map50']:.4f} | mAP50-95 = {det['map50_95']:.4f} | AP_small = {det['ap_small']:.4f} | AP_med = {det['ap_medium']:.4f}")
-                    print(f"      Relevance: AUPRC = {rel['auprc']:.4f} | F1 = {rel['f1']:.4f} | Prec = {rel['precision']:.4f} | Rec = {rel['recall']:.4f}")
-                    print(f"      Attributes: mAP_state = {det['map_state']:.4f} | State Acc = {att['state_accuracy']:.4f} | Maneuver F1 = {att['maneuver_macro_f1']:.4f}")
+                    print(
+                        f"[VAL] Epoch {epoch + 1}/{phase.epochs} ({phase.name}) | Global Epoch {global_epoch + 1}"
+                    )
+                    print(
+                        f"      Val Loss: {v_loss['total']:.4f} (Det: {v_loss['detection']:.3f} | State: {v_loss['state']:.3f} | Rel: {v_loss['relevance']:.3f} | NWD: {v_loss['nwd']:.3f})"
+                    )
+                    print(
+                        f"      Detection: mAP50 = {det['map50']:.4f} | mAP50-95 = {det['map50_95']:.4f} | AP_small = {det['ap_small']:.4f} | AP_med = {det['ap_medium']:.4f}"
+                    )
+                    print(
+                        f"      Relevance: AUPRC = {rel['auprc']:.4f} | F1 = {rel['f1']:.4f} | Prec = {rel['precision']:.4f} | Rec = {rel['recall']:.4f} | RelRedRec = {rel_red_score:.4f}"
+                    )
+                    print(
+                        f"      Attributes: mAP_state = {det['map_state']:.4f} | State Acc = {att['state_accuracy']:.4f} | Maneuver F1 = {att['maneuver_macro_f1']:.4f}"
+                    )
                     print(f"      Score = {score:.4f} {best_tag}")
                     print("=" * 82, flush=True)
 
@@ -995,6 +1196,9 @@ def train_from_config(
                         "global_epoch": global_epoch,
                         "selection_score": score,
                         "is_best": is_best,
+                        "best_tl_det_score": best_tl_det_score,
+                        "best_relevance_score": best_relevance_score,
+                        "best_relevant_red_score": best_relevant_red_score,
                         "mean_losses": v_loss,
                         "detection": det,
                         "relevance": rel,
@@ -1003,12 +1207,6 @@ def train_from_config(
                     }
                     log.write(json.dumps(val_event) + "\n")
                     log.flush()
-
-                    if is_best:
-                        best_checkpoint = dict(checkpoint)
-                        best_checkpoint["best_val_score"] = best_val_score
-                        best_checkpoint["val_metrics"] = val_res
-                        _atomic_checkpoint(output / "weights" / "best.pt", best_checkpoint)
 
                 if epoch_complete:
                     global_epoch += 1
@@ -1034,5 +1232,5 @@ def train_from_config(
         "optimizer_steps_per_epoch": int(sampler.windows_per_epoch),
         "resumed_from": str(resume_path) if resume_path is not None else None,
         "stopped_by_step_cap": stopped_by_step_cap,
-        "p2_enabled": False,
+        "p2_enabled": bool(config.get("p2_enabled", False)),
     }
