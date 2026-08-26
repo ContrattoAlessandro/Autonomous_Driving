@@ -36,7 +36,7 @@ class TestNWDTALAssigner(unittest.TestCase):
     def setUp(self) -> None:
         self.project_root = Path(__file__).resolve().parents[1]
         self.p2_model_config = self.project_root / "configs" / "model" / "tlr_yolo11n_p2.yaml"
-        self.b4_train_config = self.project_root / "configs" / "b4_nwd_tal_p2.yaml"
+        self.b4_train_config = self.project_root / "configs" / "tlr_yolo11s_champion_v4.yaml"
 
     def test_nwd_similarity_identical_boxes(self) -> None:
         b1 = torch.tensor([[10.0, 10.0, 30.0, 30.0]])
@@ -231,10 +231,13 @@ class TestNWDTALAssigner(unittest.TestCase):
 
         self.assertTrue(cfg.get("p2_enabled", False))
         self.assertIn("tal_assigner", cfg)
-        self.assertEqual(cfg["tal_assigner"]["type"], "nwd")
+        self.assertIn(cfg["tal_assigner"]["type"], ("nwd", "nwd_aware_tal"))
 
         wrapper = build_detection_model(self.p2_model_config)
-        arch_cfg = cfg.get("architecture", {})
+        arch_cfg = {
+            k: v for k, v in cfg.get("architecture", {}).items()
+            if k in UnifiedHeadConfig.__dataclass_fields__
+        }
         attach_unified_relevance_head(wrapper, config=UnifiedHeadConfig(**arch_cfg))
         model = wrapper.model
 

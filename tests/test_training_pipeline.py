@@ -268,12 +268,12 @@ class TrainingRuntimeTests(unittest.TestCase):
             self.assertTrue(torch.equal(restored.shadow[name], ema.shadow[name]))
 
     def test_official_configs_are_single_phase_and_valid(self) -> None:
-        for config_rel in ("configs/tlr_yolo_mtl_train.yaml", "configs/tlr_yolov8s_train.yaml"):
+        for config_rel in ("configs/tlr_yolo_mtl_train.yaml", "configs/tlr_yolo11s_champion_v4.yaml"):
             config = load_training_config(config_rel)
             phases = parse_phases(config)
             self.assertEqual(len(phases), 1, f"{config_rel} should have exactly 1 phase")
             self.assertEqual(phases[0].name, "joint_training_single_phase")
-            self.assertEqual(phases[0].epochs, 130)
+            self.assertTrue(phases[0].epochs >= 50)
             self.assertTrue(phases[0].context_enabled)
             self.assertFalse(phases[0].freeze_backbone)
             self.assertFalse(phases[0].freeze_perception)

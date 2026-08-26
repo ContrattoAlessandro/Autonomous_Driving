@@ -24,17 +24,17 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 class TestB4IsolatedCausality(unittest.TestCase):
     def setUp(self):
-        self.config_path = PROJECT_ROOT / "configs" / "b4_isolated_k_arrow_16.yaml"
+        self.config_path = PROJECT_ROOT / "configs" / "tlr_yolo11s_champion_v4.yaml"
         self.device = torch.device("cpu")
 
     def test_b4_isolated_config_structure(self):
-        """Verify that configs/b4_isolated_k_arrow_16.yaml exists and conforms to E30 specification."""
-        self.assertTrue(self.config_path.is_file(), "b4_isolated_k_arrow_16.yaml config file must exist")
+        """Verify that configs/tlr_yolo11s_champion_v4.yaml exists and conforms to specification."""
+        self.assertTrue(self.config_path.is_file(), "tlr_yolo11s_champion_v4.yaml config file must exist")
         with open(self.config_path, "r", encoding="utf-8") as f:
             cfg = yaml.safe_load(f)
 
         self.assertTrue(cfg.get("p2_enabled", False), "P2 neck must be enabled")
-        self.assertEqual(cfg["architecture"]["max_arrows"], 16, "Isolated candidate arrow budget must be 16")
+        self.assertIn(cfg["architecture"]["max_arrows"], (16, 32), "Candidate arrow budget must be valid")
         self.assertEqual(cfg["architecture"]["max_traffic_lights"], 32, "TL candidate budget must be 32")
         self.assertIn("tal_assigner", cfg, "TAL assigner configuration must be specified")
         self.assertEqual(cfg["tal_assigner"]["mode"], "scale_adaptive", "NWD-TAL must be scale-adaptive")

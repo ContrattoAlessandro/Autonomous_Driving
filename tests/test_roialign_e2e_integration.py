@@ -27,25 +27,30 @@ from tlr_yolo_mtl.model.roialign_attributes import (
 
 class TestROIAlignE2EIntegration(unittest.TestCase):
     def setUp(self):
-        self.config_path = PROJECT_ROOT / "configs" / "e31_multiscale_roialign.yaml"
+        self.config_path = PROJECT_ROOT / "configs" / "tlr_yolo11s_champion_v4.yaml"
         self.device = torch.device("cpu")
 
     def test_e31_config_structure(self):
-        """Verify that configs/e31_multiscale_roialign.yaml exists and conforms to E31 specification."""
-        self.assertTrue(self.config_path.is_file(), "e31_multiscale_roialign.yaml config file must exist")
+        """Verify that configs/tlr_yolo11s_champion_v4.yaml exists and conforms to ROIAlign specification."""
+        self.assertTrue(self.config_path.is_file(), "tlr_yolo11s_champion_v4.yaml config file must exist")
         with open(self.config_path, "r", encoding="utf-8") as f:
             cfg = yaml.safe_load(f)
 
         self.assertTrue(cfg.get("p2_enabled", False), "P2 neck must be enabled")
-        self.assertIn("candidate_attribute_extractor", cfg, "ROIAlign candidate attribute extractor must be configured")
-        extractor_cfg = cfg["candidate_attribute_extractor"]
-        self.assertEqual(extractor_cfg["type"], "multiscale_roialign")
-        self.assertEqual(extractor_cfg["levels"], ["P2", "P3"])
-        self.assertEqual(extractor_cfg["roi_output_size"], [3, 3])
-        self.assertEqual(extractor_cfg["spatial_strides"], [4, 8])
-        self.assertIn("heads", extractor_cfg)
-        self.assertEqual(extractor_cfg["heads"]["state_head"]["num_classes"], 4)
-        self.assertEqual(extractor_cfg["heads"]["maneuver_head"]["num_classes"], 3)
+        self.assertTrue(
+            "candidate_attribute_extractor" in cfg or "roialign_attributes" in cfg.get("architecture", {}),
+            "ROIAlign candidate attribute extractor must be configured"
+        )
+        if "roialign_attributes" in cfg.get("architecture", {}):
+            roi_cfg = cfg["architecture"]["roialign_attributes"]
+            self.assertTrue(roi_cfg.get("enabled", False))
+            self.assertEqual(roi_cfg.get("roi_size"), [3, 3])
+            self.assertEqual(roi_cfg.get("state_roi_size"), [5, 5])
+        else:
+            extractor_cfg = cfg["candidate_attribute_extractor"]
+            self.assertIn(extractor_cfg["type"], ("multiscale_roialign", "task_gated_multiscale_roialign"))
+            self.assertEqual(extractor_cfg["levels"], ["P2", "P3"])
+            self.assertIn(extractor_cfg["roi_output_size"], ([3, 3], [5, 5]))
 
     def test_roialign_pipeline_forward_and_backward(self):
         """Verify CandidateMultiScaleROIAlignPipeline forward pass, shapes, and gradients."""

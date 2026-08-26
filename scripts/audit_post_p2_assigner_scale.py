@@ -62,7 +62,10 @@ def load_p2_model_and_criterion(config_path: Path, device: torch.device):
     if weights_path.is_file():
         load_coco_warmstart(wrapper, weights_path)
 
-    arch_cfg = cfg.get("architecture", {})
+    arch_cfg = {
+        k: v for k, v in cfg.get("architecture", {}).items()
+        if k in UnifiedHeadConfig.__dataclass_fields__
+    }
     attach_unified_relevance_head(wrapper, config=UnifiedHeadConfig(**arch_cfg))
 
     model = wrapper.model.to(device).eval()

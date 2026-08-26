@@ -30,7 +30,7 @@ class TestPostP2AssignerAudit(unittest.TestCase):
     def setUp(self) -> None:
         self.project_root = Path(__file__).resolve().parents[1]
         self.p2_model_config = self.project_root / "configs" / "model" / "tlr_yolo11n_p2.yaml"
-        self.p2_train_config = self.project_root / "configs" / "b2_p2_neck.yaml"
+        self.p2_train_config = self.project_root / "configs" / "tlr_yolo11s_champion_v4.yaml"
 
     def test_iou_matrix_calculation(self) -> None:
         # Perfectly overlapping boxes
