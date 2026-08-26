@@ -24,12 +24,176 @@ def xywh_to_xyxy(boxes: torch.Tensor) -> torch.Tensor:
     return torch.cat((center - half_size, center + half_size), dim=1)
 
 
+
+def compute_pairwise_iou(
+    boxes1: torch.Tensor, boxes2: torch.Tensor, eps: float = 1e-9
+) -> torch.Tensor:
+    """Compute pairwise Intersection over Union (IoU) matrix in [0, 1]."""
+    if boxes1.ndim != 2 or boxes1.shape[1] != 4 or boxes2.ndim != 2 or boxes2.shape[1] != 4:
+        raise ValueError("boxes1 and boxes2 must have shape [N, 4] and [M, 4]")
+    if boxes1.numel() == 0 or boxes2.numel() == 0:
+        return boxes1.new_zeros((boxes1.shape[0], boxes2.shape[0]))
+    lt = torch.max(boxes1[:, None, :2], boxes2[None, :, :2])
+    rb = torch.min(boxes1[:, None, 2:], boxes2[None, :, 2:])
+    wh = (rb - lt).clamp_min(0)
+    inter = wh[:, :, 0] * wh[:, :, 1]
+    area1 = (boxes1[:, 2] - boxes1[:, 0]).clamp_min(0) * (boxes1[:, 3] - boxes1[:, 1]).clamp_min(0)
+    area2 = (boxes2[:, 2] - boxes2[:, 0]).clamp_min(0) * (boxes2[:, 3] - boxes2[:, 1]).clamp_min(0)
+    union = area1[:, None] + area2[None, :] - inter
+    return inter / union.clamp_min(eps)
+
+
+def compute_pairwise_nwd(
+    boxes1: torch.Tensor,
+    boxes2: torch.Tensor,
+    constant: float = 12.0,
+    eps: float = 1e-9,
+) -> torch.Tensor:
+    """Compute pairwise Normalized Wasserstein Distance (NWD) matrix in (0, 1]."""
+    if constant <= 0:
+        raise ValueError("NWD normalization constant must be positive")
+    if boxes1.ndim != 2 or boxes1.shape[1] != 4 or boxes2.ndim != 2 or boxes2.shape[1] != 4:
+        raise ValueError("boxes1 and boxes2 must have shape [N, 4] and [M, 4]")
+    if boxes1.numel() == 0 or boxes2.numel() == 0:
+        return boxes1.new_zeros((boxes1.shape[0], boxes2.shape[0]))
+    c1 = (boxes1[:, :2] + boxes1[:, 2:]) / 2.0
+    c2 = (boxes2[:, :2] + boxes2[:, 2:]) / 2.0
+    s1 = (boxes1[:, 2:] - boxes1[:, :2]).clamp_min(0.0)
+    s2 = (boxes2[:, 2:] - boxes2[:, :2]).clamp_min(0.0)
+
+    d_center = c1[:, None, :] - c2[None, :, :]
+    d_size = s1[:, None, :] - s2[None, :, :]
+    w2 = d_center.square().sum(-1) + 0.25 * d_size.square().sum(-1)
+    return torch.exp(-torch.sqrt(w2.clamp_min(eps)) / constant)
+
+
+def nwd_nms(
+    boxes: torch.Tensor,
+    scores: torch.Tensor,
+    *,
+    nwd_threshold: float = 0.5,
+    nwd_constant: float = 12.0,
+) -> torch.Tensor:
+    """Greedy Non-Maximum Suppression using Gaussian Normalized Wasserstein Distance."""
+    if boxes.ndim != 2 or boxes.shape[1] != 4:
+        raise ValueError("boxes must have shape [N, 4]")
+    if scores.ndim != 1 or scores.shape[0] != boxes.shape[0]:
+        raise ValueError("scores must have shape [N] matching boxes")
+    num_boxes = boxes.shape[0]
+    if num_boxes == 0:
+        return torch.empty(0, dtype=torch.long, device=boxes.device)
+    if num_boxes == 1:
+        return torch.tensor([0], dtype=torch.long, device=boxes.device)
+
+    is_cuda = boxes.is_cuda
+    orig_device = boxes.device
+    if is_cuda and num_boxes <= 500:
+        boxes_work = boxes.cpu()
+        scores_work = scores.cpu()
+    else:
+        boxes_work = boxes
+        scores_work = scores
+
+    order = scores_work.sort(descending=True).indices
+    sorted_boxes = boxes_work[order]
+    sim_matrix = compute_pairwise_nwd(sorted_boxes, sorted_boxes, constant=nwd_constant)
+    suppress_matrix = sim_matrix >= nwd_threshold
+
+    keep: list[torch.Tensor] = []
+    suppressed = torch.zeros(num_boxes, dtype=torch.bool, device=boxes_work.device)
+    for i in range(num_boxes):
+        if suppressed[i]:
+            continue
+        keep.append(order[i])
+        suppressed |= suppress_matrix[i]
+    result = torch.stack(keep)
+    return result.to(orig_device) if is_cuda and num_boxes <= 500 else result
+
+
+def size_adaptive_nms(
+    boxes: torch.Tensor,
+    scores: torch.Tensor,
+    *,
+    quality_scores: torch.Tensor | None = None,
+    quality_alpha: float = 0.70,
+    iou_threshold: float = 0.7,
+    nwd_threshold: float = 0.5,
+    nwd_constant: float = 12.0,
+    area_threshold: float = 64.0,
+) -> torch.Tensor:
+    """Size-Adaptive NMS: Gaussian NWD for tiny boxes (< area_thresh), IoU for larger boxes.
+    
+    If quality_scores is provided, candidate ranking order is determined by the joint
+    quality-aware score: s = scores^alpha * quality_scores^(1 - alpha).
+    """
+    if boxes.ndim != 2 or boxes.shape[1] != 4:
+        raise ValueError("boxes must have shape [N, 4]")
+    if scores.ndim != 1 or scores.shape[0] != boxes.shape[0]:
+        raise ValueError("scores must have shape [N] matching boxes")
+    num_boxes = boxes.shape[0]
+    if num_boxes == 0:
+        return torch.empty(0, dtype=torch.long, device=boxes.device)
+    if num_boxes == 1:
+        return torch.tensor([0], dtype=torch.long, device=boxes.device)
+
+    is_cuda = boxes.is_cuda
+    orig_device = boxes.device
+    if is_cuda and num_boxes <= 500:
+        boxes_work = boxes.cpu()
+        scores_work = scores.cpu()
+        quality_work = quality_scores.cpu() if quality_scores is not None else None
+    else:
+        boxes_work = boxes
+        scores_work = scores
+        quality_work = quality_scores
+
+    if quality_work is not None and quality_alpha < 1.0:
+        p = scores_work.clamp(1e-7, 1.0)
+        q = quality_work.clamp(1e-7, 1.0)
+        ranking_scores = p.pow(quality_alpha) * q.pow(1.0 - quality_alpha)
+    else:
+        ranking_scores = scores_work
+
+    order = ranking_scores.sort(descending=True).indices
+    sorted_boxes = boxes_work[order]
+    areas = (sorted_boxes[:, 2] - sorted_boxes[:, 0]).clamp_min(0) * (
+        sorted_boxes[:, 3] - sorted_boxes[:, 1]
+    ).clamp_min(0)
+    is_tiny = areas < area_threshold
+    both_tiny = is_tiny[:, None] & is_tiny[None, :]
+
+    iou_matrix = compute_pairwise_iou(sorted_boxes, sorted_boxes)
+    nwd_matrix = compute_pairwise_nwd(sorted_boxes, sorted_boxes, constant=nwd_constant)
+
+    suppress_matrix = torch.where(
+        both_tiny,
+        nwd_matrix >= nwd_threshold,
+        iou_matrix >= iou_threshold,
+    )
+
+    keep: list[torch.Tensor] = []
+    suppressed = torch.zeros(num_boxes, dtype=torch.bool, device=boxes_work.device)
+    for i in range(num_boxes):
+        if suppressed[i]:
+            continue
+        keep.append(order[i])
+        suppressed |= suppress_matrix[i]
+    result = torch.stack(keep)
+    return result.to(orig_device) if is_cuda and num_boxes <= 500 else result
+
+
 def retained_nms_indices(
     decoded: torch.Tensor,
     *,
     confidence_threshold: float,
     iou_threshold: float,
     max_detections: int,
+    nms_type: str = "standard",
+    nwd_threshold: float = 0.5,
+    nwd_constant: float = 12.0,
+    nwd_area_threshold: float = 64.0,
+    quality_scores: torch.Tensor | None = None,
+    quality_alpha: float = 0.70,
 ) -> list[torch.Tensor]:
     """Return original dense indices for each image after score filter/NMS."""
 
@@ -47,7 +211,28 @@ def retained_nms_indices(
             retained.append(candidates)
             continue
         boxes = xywh_to_xyxy(decoded[image, :4, candidates].transpose(0, 1))
-        kept_local = nms(boxes, scores[candidates], iou_threshold)[:max_detections]
+        cand_scores = scores[candidates]
+        cand_qual = quality_scores[image, candidates] if quality_scores is not None else None
+        if nms_type in ("size_adaptive", "adaptive_nwd"):
+            kept_local = size_adaptive_nms(
+                boxes,
+                cand_scores,
+                quality_scores=cand_qual,
+                quality_alpha=quality_alpha,
+                iou_threshold=iou_threshold,
+                nwd_threshold=nwd_threshold,
+                nwd_constant=nwd_constant,
+                area_threshold=nwd_area_threshold,
+            )[:max_detections]
+        elif nms_type in ("nwd", "pure_nwd"):
+            kept_local = nwd_nms(
+                boxes,
+                cand_scores,
+                nwd_threshold=nwd_threshold,
+                nwd_constant=nwd_constant,
+            )[:max_detections]
+        else:
+            kept_local = nms(boxes, cand_scores, iou_threshold)[:max_detections]
         retained.append(candidates[kept_local])
     return retained
 
@@ -90,6 +275,12 @@ def _retained_unified_candidates(
     confidence_threshold: float,
     iou_threshold: float,
     max_detections: int,
+    nms_type: str = "standard",
+    nwd_threshold: float = 0.5,
+    nwd_constant: float = 12.0,
+    nwd_area_threshold: float = 64.0,
+    quality_scores: torch.Tensor | None = None,
+    quality_alpha: float = 0.70,
 ) -> tuple[list[torch.Tensor], list[torch.Tensor]]:
     if decoded.ndim != 3 or decoded.shape[1] != 6:
         raise ValueError("unified detections must have shape [B, 6, A]")
@@ -110,7 +301,32 @@ def _retained_unified_candidates(
             slot_result.append(slots)
             continue
         boxes = xywh_to_xyxy(decoded[image, :4, dense].transpose(0, 1))
-        kept = nms(boxes, scores, iou_threshold)[:max_detections]
+        cand_qual = None
+        if quality_scores is not None:
+            if quality_scores.ndim == 3:
+                cand_qual = quality_scores[image, 0, dense]
+            else:
+                cand_qual = quality_scores[image, dense]
+        if nms_type in ("size_adaptive", "adaptive_nwd"):
+            kept = size_adaptive_nms(
+                boxes,
+                scores,
+                quality_scores=cand_qual,
+                quality_alpha=quality_alpha,
+                iou_threshold=iou_threshold,
+                nwd_threshold=nwd_threshold,
+                nwd_constant=nwd_constant,
+                area_threshold=nwd_area_threshold,
+            )[:max_detections]
+        elif nms_type in ("nwd", "pure_nwd"):
+            kept = nwd_nms(
+                boxes,
+                scores,
+                nwd_threshold=nwd_threshold,
+                nwd_constant=nwd_constant,
+            )[:max_detections]
+        else:
+            kept = nms(boxes, scores, iou_threshold)[:max_detections]
         dense_result.append(dense[kept])
         slot_result.append(slots[kept])
     return dense_result, slot_result
@@ -143,6 +359,12 @@ def _postprocess_unified_outputs(
     iou_threshold: float,
     max_traffic_lights: int,
     max_arrows: int,
+    nms_type: str = "standard",
+    nwd_threshold: float = 0.5,
+    nwd_constant: float = 12.0,
+    nwd_area_threshold: float = 64.0,
+    quality_scores: torch.Tensor | None = None,
+    quality_alpha: float = 0.70,
 ) -> dict[str, dict[str, torch.Tensor]]:
     (
         detection,
@@ -165,6 +387,12 @@ def _postprocess_unified_outputs(
         confidence_threshold=traffic_confidence,
         iou_threshold=iou_threshold,
         max_detections=max_traffic_lights,
+        nms_type=nms_type,
+        nwd_threshold=nwd_threshold,
+        nwd_constant=nwd_constant,
+        nwd_area_threshold=nwd_area_threshold,
+        quality_scores=quality_scores,
+        quality_alpha=quality_alpha,
     )
     arrow_lists, arrow_slot_lists = _retained_unified_candidates(
         detection,
@@ -174,6 +402,10 @@ def _postprocess_unified_outputs(
         confidence_threshold=arrow_confidence,
         iou_threshold=iou_threshold,
         max_detections=max_arrows,
+        nms_type=nms_type,
+        nwd_threshold=nwd_threshold,
+        nwd_constant=nwd_constant,
+        nwd_area_threshold=nwd_area_threshold,
     )
     traffic_indices, traffic_valid = _pad_indices(traffic_lists)
     traffic_slots, _ = _pad_indices(traffic_slot_lists)
@@ -246,6 +478,12 @@ def postprocess_multitask_outputs(
     iou_threshold: float = 0.7,
     max_traffic_lights: int = 100,
     max_arrows: int = 50,
+    nms_type: str = "standard",
+    nwd_threshold: float = 0.5,
+    nwd_constant: float = 12.0,
+    nwd_area_threshold: float = 64.0,
+    quality_scores: torch.Tensor | None = None,
+    quality_alpha: float = 0.70,
 ) -> dict[str, dict[str, torch.Tensor]]:
     """Decode unified outputs; legacy six-tensor checkpoints remain readable."""
 
@@ -257,6 +495,12 @@ def postprocess_multitask_outputs(
             iou_threshold=iou_threshold,
             max_traffic_lights=max_traffic_lights,
             max_arrows=max_arrows,
+            nms_type=nms_type,
+            nwd_threshold=nwd_threshold,
+            nwd_constant=nwd_constant,
+            nwd_area_threshold=nwd_area_threshold,
+            quality_scores=quality_scores,
+            quality_alpha=quality_alpha,
         )
     if len(outputs) != 6:
         raise ValueError("full model must return 11 unified tensors")
@@ -266,12 +510,22 @@ def postprocess_multitask_outputs(
         confidence_threshold=traffic_confidence,
         iou_threshold=iou_threshold,
         max_detections=max_traffic_lights,
+        nms_type=nms_type,
+        nwd_threshold=nwd_threshold,
+        nwd_constant=nwd_constant,
+        nwd_area_threshold=nwd_area_threshold,
+        quality_scores=quality_scores,
+        quality_alpha=quality_alpha,
     )
     arrow_indices_list = retained_nms_indices(
         arrows,
         confidence_threshold=arrow_confidence,
         iou_threshold=iou_threshold,
         max_detections=max_arrows,
+        nms_type=nms_type,
+        nwd_threshold=nwd_threshold,
+        nwd_constant=nwd_constant,
+        nwd_area_threshold=nwd_area_threshold,
     )
     traffic_indices, traffic_valid = _pad_indices(traffic_indices_list)
     arrow_indices, arrow_valid = _pad_indices(arrow_indices_list)

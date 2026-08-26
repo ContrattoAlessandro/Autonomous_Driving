@@ -316,6 +316,9 @@ class UnifiedTrafficControlDetect(Detect):
         self.local_relevance_heads = nn.ModuleList(
             _AttributeTower(value, 1) for value in channels
         )
+        self.quality_heads = nn.ModuleList(
+            _AttributeTower(value, 1) for value in channels
+        )
         self.token_feature_heads = nn.ModuleList(
             nn.Sequential(
                 nn.Conv2d(value, self.head_config.token_feature_dim, kernel_size=1, bias=False),
@@ -607,6 +610,9 @@ class UnifiedTrafficControlDetect(Detect):
                 )
             ]
         )
+        quality_logits = self._flatten(
+            [head(value) for head, value in zip(self.quality_heads, features)]
+        )
         token_features = self._flatten(
             [head(value) for head, value in zip(self.token_feature_heads, features)]
         )
@@ -641,6 +647,7 @@ class UnifiedTrafficControlDetect(Detect):
                     "maneuver_logits": maneuver_logits,
                     "ego_lane_logits": ego_lane_logits,
                     "dense_local_relevance_logits": dense_local_relevance_logits,
+                    "quality_logits": quality_logits,
                     "token_features": token_features,
                     "attention_enabled_flag": decoded.new_tensor(
                         1.0 if self.attention_enabled else 0.0
@@ -670,6 +677,7 @@ class UnifiedTrafficControlDetect(Detect):
                 "maneuver_logits": maneuver_logits,
                 "ego_lane_logits": ego_lane_logits,
                 "dense_local_relevance_logits": dense_local_relevance_logits,
+                "quality_logits": quality_logits,
                 "token_features": token_features,
                 "attention_enabled_flag": decoded.new_tensor(
                     1.0 if self.attention_enabled else 0.0

@@ -96,6 +96,7 @@ def assigned_relevance_focal_bce(
     foreground_mask: torch.Tensor,
     target_gt_indices: torch.Tensor,
     *,
+    instance_weights: torch.Tensor | None = None,
     image_valid: torch.Tensor | None = None,
     alpha: float | None = None,
     gamma: float = 2.0,
@@ -145,7 +146,11 @@ def assigned_relevance_focal_bce(
             alpha * selected_targets + (1.0 - alpha) * (1.0 - selected_targets)
         )
         loss = loss * alpha_target
+    if instance_weights is not None:
+        anchor_weights = instance_weights.to(logits.device).gather(1, safe_indices)
+        loss = loss * anchor_weights[valid].to(loss.dtype)
     return loss.mean(), count
+
 
 
 def gather_candidate_relevance(

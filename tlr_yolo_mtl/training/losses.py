@@ -23,7 +23,13 @@ from ..model.attributes import (
 )
 from ..model.relevance import assigned_relevance_focal_bce
 from ..model.unified import TRAFFIC_LIGHT_CLASS
+from .class_balanced_loss import (
+    DTLD_STATE_CLASS_COUNTS,
+    assigned_class_balanced_state_loss,
+)
+from .quality_loss import NWDQualityLoss
 from .tal import build_task_aligned_assigner
+
 
 
 class IgnoreAwareDetectionLoss(v8DetectionLoss):
@@ -222,6 +228,19 @@ def normalized_wasserstein_loss(
 
 
 from .contrastive_loss import TLArrowContrastiveLoss
+from .distillation import (
+    LocalViewCropExtractor,
+    LocalViewDistillationLoss,
+    LocalViewTeacherTower,
+    StudentKDProjector,
+)
+from .refinement_loss import RefinementLossWeights, SparseRefinementLoss
+from .temporal_distillation import (
+    TemporalAttentionFusion,
+    TemporalDistillationLoss,
+    TemporalSequenceTeacher,
+    TemporalTeacherTower,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -235,6 +254,10 @@ class MultiTaskLossWeights:
     nwd: float = 0.5
     association: float = 0.0
     contrastive: float = 0.0
+    distillation: float = 0.0
+    quality: float = 0.0
+    refinement: float = 0.0
+    temporal_distillation: float = 0.0
 
 
 @dataclass(slots=True)
@@ -256,6 +279,14 @@ class TLRMultiTaskLossResult:
     metrics: dict[str, torch.Tensor]
     contrastive: torch.Tensor | None = None
     contrastive_matches: int = 0
+    distillation: torch.Tensor | None = None
+    distillation_matches: int = 0
+    quality: torch.Tensor | None = None
+    quality_matches: int = 0
+    refinement: torch.Tensor | None = None
+    refinement_matches: int = 0
+    temporal_distillation: torch.Tensor | None = None
+    temporal_distillation_matches: int = 0
 
     # Read-only compatibility aliases for historical diagnostics.
     @property
@@ -409,6 +440,10 @@ class TLRMultiTaskCriterion:
         *,
         weights: MultiTaskLossWeights | None = None,
         state_class_weights: torch.Tensor | None = None,
+        state_loss_type: str = "focal",
+        state_beta: float = 0.9999,
+        state_class_counts: Sequence[int] | torch.Tensor = DTLD_STATE_CLASS_COUNTS,
+        state_prior_scale: float = 1.0,
         relevance_alpha: float | None = None,
         attribute_gamma: float = 1.5,
         maneuver_gamma: float = 2.0,
@@ -417,6 +452,10 @@ class TLRMultiTaskCriterion:
         nwd_constant: float = 12.0,
         tal_assigner_type: str = "standard",
         tal_assigner_config: Mapping[str, Any] | None = None,
+        distillation_config: Mapping[str, Any] | None = None,
+        quality_config: Mapping[str, Any] | None = None,
+        refinement_config: Mapping[str, Any] | None = None,
+        temporal_distillation_config: Mapping[str, Any] | None = None,
     ) -> None:
         self.weights = weights or MultiTaskLossWeights()
         self.tal_assigner_type = str(tal_assigner_type)
@@ -429,6 +468,10 @@ class TLRMultiTaskCriterion:
         if isinstance(self.traffic.hyp, Mapping):
             self.traffic.hyp = SimpleNamespace(**self.traffic.hyp)
         self.state_class_weights = state_class_weights
+        self.state_loss_type = str(state_loss_type)
+        self.state_beta = float(state_beta)
+        self.state_class_counts = state_class_counts
+        self.state_prior_scale = float(state_prior_scale)
         self.relevance_alpha = relevance_alpha
         self.attribute_gamma = float(attribute_gamma)
         self.maneuver_gamma = float(maneuver_gamma)
@@ -439,6 +482,57 @@ class TLRMultiTaskCriterion:
             token_dim=128,
             embed_dim=64,
             temperature=0.1,
+        )
+        dist_cfg = dict(distillation_config or {})
+        crop_size = tuple(dist_cfg.get("crop_size", (64, 64)))
+        self.crop_extractor = LocalViewCropExtractor(
+            crop_size=crop_size,
+            margin=float(dist_cfg.get("crop_margin", 0.15)),
+            max_area_threshold=float(dist_cfg.get("max_area_threshold", 256.0)),
+        )
+        self.teacher_tower = LocalViewTeacherTower(
+            embed_dim=int(dist_cfg.get("embed_dim", 128)),
+            num_states=4,
+        )
+        self.student_kd_projector = StudentKDProjector(
+            student_dim=int(dist_cfg.get("student_dim", 128)),
+            embed_dim=int(dist_cfg.get("embed_dim", 128)),
+        )
+        self.distillation_loss_module = LocalViewDistillationLoss(
+            feature_weight=float(dist_cfg.get("feature_weight", 0.5)),
+            state_weight=float(dist_cfg.get("state_weight", 0.5)),
+            temperature=float(dist_cfg.get("temperature", 3.0)),
+            feature_loss_type=str(dist_cfg.get("feature_loss_type", "mse")),
+            teacher_supervised=bool(dist_cfg.get("teacher_supervised", True)),
+        )
+        qual_cfg = dict(quality_config or {})
+        self.quality_criterion = NWDQualityLoss(
+            area_threshold=float(qual_cfg.get("area_threshold", 64.0)),
+            nwd_constant=float(qual_cfg.get("nwd_constant", self.nwd_constant)),
+            gamma=float(qual_cfg.get("gamma", 1.5)),
+        )
+        refine_cfg = dict(refinement_config or {})
+        self.refinement_loss_module = SparseRefinementLoss(
+            box_refine_weight=float(refine_cfg.get("box_refine_weight", 1.0)),
+            state_refine_weight=float(refine_cfg.get("state_refine_weight", 0.5)),
+            quality_refine_weight=float(refine_cfg.get("quality_refine_weight", 0.25)),
+            nwd_constant=float(refine_cfg.get("nwd_constant", self.nwd_constant)),
+            focal_gamma=float(refine_cfg.get("focal_gamma", 1.5)),
+        )
+        temp_cfg = dict(temporal_distillation_config or {})
+        self.temporal_teacher = TemporalTeacherTower(
+            in_dim=int(temp_cfg.get("in_dim", 128)),
+            embed_dim=int(temp_cfg.get("embed_dim", 128)),
+            num_states=4,
+            window_size=int(temp_cfg.get("window_size", 3)),
+        )
+        self.temporal_distillation_loss_module = TemporalDistillationLoss(
+            feature_weight=float(temp_cfg.get("feature_weight", 0.5)),
+            state_weight=float(temp_cfg.get("state_weight", 0.5)),
+            flicker_weight=float(temp_cfg.get("flicker_weight", 0.25)),
+            temperature=float(temp_cfg.get("temperature", 3.0)),
+            feature_loss_type=str(temp_cfg.get("feature_loss_type", "mse")),
+            teacher_supervised=bool(temp_cfg.get("teacher_supervised", True)),
         )
 
 
@@ -518,12 +612,16 @@ class TLRMultiTaskCriterion:
         ego_lane_targets = _pad_float_targets(
             batch["object_ego_lane"].to(device), batch_indices, batch_size
         )
-        state_loss, state_matches = assigned_attribute_cross_entropy(
+        state_loss, state_matches = assigned_class_balanced_state_loss(
             parsed["state_logits"],
             state_targets,
             foreground,
             target_indices,
+            loss_type=self.state_loss_type,
+            beta=self.state_beta,
             gamma=self.attribute_gamma,
+            prior_scale=self.state_prior_scale,
+            class_counts=self.state_class_counts,
             class_weights=self.state_class_weights,
         )
         round_loss, round_matches = assigned_binary_focal_bce(
@@ -639,6 +737,174 @@ class TLRMultiTaskCriterion:
             contrastive_loss = parsed["scores"].sum() * 0.0
             contrastive_margin = 0.0
 
+        # Local-View Tiny-TL High-Resolution Crop Distillation (Ticket E48)
+        distillation_matches = 0
+        if self.weights.distillation > 0.0 and "images" in batch:
+            images = batch["images"].to(device)
+            if next(self.teacher_tower.parameters()).device != device:
+                self.teacher_tower = self.teacher_tower.to(device)
+            if next(self.student_kd_projector.parameters()).device != device:
+                self.student_kd_projector = self.student_kd_projector.to(device)
+
+            raw_cls = batch["object_cls"].to(device).reshape(-1)
+            raw_boxes = batch["object_bboxes"].to(device).reshape(-1, 4)
+            raw_b_idx = batch["object_batch_idx"].to(device).reshape(-1)
+            raw_states = batch["object_state"].to(device).reshape(-1)
+
+            tl_mask = raw_cls.eq(TRAFFIC_LIGHT_CLASS)
+            if tl_mask.any():
+                tl_boxes = raw_boxes[tl_mask]
+                tl_b_idx = raw_b_idx[tl_mask]
+                tl_states = raw_states[tl_mask]
+
+                crops_data = self.crop_extractor(
+                    images,
+                    tl_boxes,
+                    tl_b_idx,
+                    tl_states,
+                    is_normalized=False,
+                )
+
+                if crops_data.crops.shape[0] > 0:
+                    t_features, t_state_logits = self.teacher_tower(crops_data.crops)
+                    cand_tokens = parsed.get("traffic_tokens")
+                    cand_logits = parsed.get("state_logits")
+
+                    num_crops = crops_data.crops.shape[0]
+                    student_feat_list = []
+                    student_logit_list = []
+
+                    for c_idx in range(num_crops):
+                        b_i = int(crops_data.batch_indices[c_idx].item())
+                        g_i = int(crops_data.box_indices[c_idx].item())
+
+                        if cand_logits is not None:
+                            anchor_sel = foreground[b_i] & (target_indices[b_i] == g_i)
+                            if anchor_sel.any():
+                                first_anc = torch.where(anchor_sel)[0][0]
+                                s_logit = cand_logits[b_i, :, first_anc]
+                            else:
+                                s_logit = cand_logits[b_i].mean(dim=-1)
+                        else:
+                            s_logit = torch.zeros(4, device=device, dtype=images.dtype)
+
+                        if cand_tokens is not None and cand_tokens.shape[1] > 0:
+                            s_tok = cand_tokens[b_i, min(c_idx, cand_tokens.shape[1] - 1)]
+                        else:
+                            s_tok = torch.zeros(128, device=device, dtype=images.dtype)
+
+                        student_feat_list.append(s_tok)
+                        student_logit_list.append(s_logit)
+
+                    s_features = torch.stack(student_feat_list, dim=0)
+                    s_logits = torch.stack(student_logit_list, dim=0)
+
+                    s_projected = self.student_kd_projector(s_features)
+                    kd_loss, kd_metrics = self.distillation_loss_module(
+                        s_projected,
+                        t_features,
+                        s_logits,
+                        t_state_logits,
+                        crops_data.gt_states,
+                    )
+                    distillation_loss = kd_loss
+                    distillation_matches = num_crops
+                else:
+                    distillation_loss = parsed["scores"].sum() * 0.0
+                    kd_metrics = {
+                        "kd_loss": distillation_loss.detach(),
+                        "kd_feature_loss": distillation_loss.detach(),
+                        "kd_state_loss": distillation_loss.detach(),
+                        "teacher_ce_loss": distillation_loss.detach(),
+                        "kd_valid_crops": torch.tensor(0, device=device),
+                    }
+            else:
+                distillation_loss = parsed["scores"].sum() * 0.0
+                kd_metrics = {
+                    "kd_loss": distillation_loss.detach(),
+                    "kd_feature_loss": distillation_loss.detach(),
+                    "kd_state_loss": distillation_loss.detach(),
+                    "teacher_ce_loss": distillation_loss.detach(),
+                    "kd_valid_crops": torch.tensor(0, device=device),
+                }
+        else:
+            distillation_loss = parsed["scores"].sum() * 0.0
+            kd_metrics = {
+                "kd_loss": distillation_loss.detach(),
+                "kd_feature_loss": distillation_loss.detach(),
+                "kd_state_loss": distillation_loss.detach(),
+                "teacher_ce_loss": distillation_loss.detach(),
+                "kd_valid_crops": torch.tensor(0, device=device),
+            }
+
+        # NWD-Quality-Aware Confidence Supervision (Ticket E50)
+        quality_matches = 0
+        if self.weights.quality > 0.0 and "quality_logits" in parsed:
+            q_loss, q_metrics, quality_matches = self.quality_criterion(
+                parsed["quality_logits"],
+                predicted_boxes,
+                target_boxes,
+                foreground,
+                target_indices,
+            )
+            quality_loss = q_loss
+        else:
+            quality_loss = parsed["scores"].sum() * 0.0
+            q_metrics = {
+                "quality_loss": quality_loss.detach(),
+                "mean_quality_target": quality_loss.detach(),
+                "mean_quality_pred": quality_loss.detach(),
+                "quality_matches": torch.tensor(0, device=device),
+            }
+
+        # Sparse Candidate Refinement Supervision (Ticket E49)
+        refinement_matches = 0
+        if self.weights.refinement > 0.0 and "refinement_outputs" in parsed:
+            refine_dict = self.refinement_loss_module(
+                parsed["refinement_outputs"],
+                target_boxes,
+                state_targets,
+                target_indices,
+            )
+            refinement_loss = refine_dict["loss_refine_total"]
+            refinement_matches = int((target_indices >= 0).sum().item())
+            refine_metrics = {
+                "refinement_loss": refinement_loss.detach(),
+                "refinement_box_loss": refine_dict["loss_refine_box"].detach(),
+                "refinement_state_loss": refine_dict["loss_refine_state"].detach(),
+                "refinement_quality_loss": refine_dict["loss_refine_quality"].detach(),
+            }
+        else:
+            refinement_loss = parsed["scores"].sum() * 0.0
+            refine_metrics = {
+                "refinement_loss": refinement_loss.detach(),
+                "refinement_box_loss": refinement_loss.detach(),
+                "refinement_state_loss": refinement_loss.detach(),
+                "refinement_quality_loss": refinement_loss.detach(),
+            }
+
+        # Temporal Distillation Supervision (Ticket E52)
+        temporal_distillation_matches = 0
+        if self.weights.temporal_distillation > 0.0 and "temporal_teacher_features" in parsed:
+            t_loss, t_metrics = self.temporal_distillation_loss_module(
+                parsed.get("traffic_tokens", torch.empty((0, 128), device=device)),
+                parsed["temporal_teacher_features"],
+                parsed.get("state_logits", torch.empty((0, 4), device=device)),
+                parsed["temporal_teacher_logits"],
+            )
+            temporal_distillation_loss = t_loss
+            temporal_distillation_matches = int(t_metrics.get("temporal_valid_instances", 0))
+            temporal_metrics = t_metrics
+        else:
+            temporal_distillation_loss = parsed["scores"].sum() * 0.0
+            temporal_metrics = {
+                "temporal_kd_loss": temporal_distillation_loss.detach(),
+                "temporal_feat_loss": temporal_distillation_loss.detach(),
+                "temporal_state_loss": temporal_distillation_loss.detach(),
+                "temporal_flicker_loss": temporal_distillation_loss.detach(),
+                "teacher_ce_loss": temporal_distillation_loss.detach(),
+            }
+
         detection_loss = detection_vector.sum() * batch_size
         association_loss = parsed["attention_weights"].sum() * 0.0
         weight = self.weights
@@ -652,6 +918,10 @@ class TLRMultiTaskCriterion:
             + weight.relevance * relevance_loss
             + weight.association * association_loss
             + weight.contrastive * contrastive_loss
+            + weight.distillation * distillation_loss
+            + weight.quality * quality_loss
+            + weight.refinement * refinement_loss
+            + weight.temporal_distillation * temporal_distillation_loss
         )
         metrics = {
             **detection_metrics,
@@ -666,6 +936,12 @@ class TLRMultiTaskCriterion:
             "association_loss": association_loss.detach(),
             "contrastive_loss": contrastive_loss.detach(),
             "contrastive_margin": torch.tensor(contrastive_margin, device=device),
+            "distillation_loss": distillation_loss.detach(),
+            **kd_metrics,
+            "quality_loss": quality_loss.detach(),
+            **q_metrics,
+            **refine_metrics,
+            **temporal_metrics,
             "total_loss": total.detach(),
         }
         return TLRMultiTaskLossResult(
@@ -679,11 +955,19 @@ class TLRMultiTaskCriterion:
             nwd=nwd_loss,
             association=association_loss,
             contrastive=contrastive_loss,
+            distillation=distillation_loss,
+            quality=quality_loss,
+            refinement=refinement_loss,
+            temporal_distillation=temporal_distillation_loss,
             state_matches=state_matches,
             round_matches=round_matches,
             maneuver_matches=maneuver_matches,
             ego_lane_matches=ego_lane_matches,
             relevance_matches=relevance_matches,
             contrastive_matches=contrastive_matches,
+            distillation_matches=distillation_matches,
+            quality_matches=quality_matches,
+            refinement_matches=refinement_matches,
+            temporal_distillation_matches=temporal_distillation_matches,
             metrics=metrics,
         )

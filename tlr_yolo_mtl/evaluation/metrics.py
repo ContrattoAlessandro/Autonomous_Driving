@@ -311,6 +311,10 @@ def compute_detection_and_attribute_map(
     scale_scores: dict[str, list[float]] = {"small": [], "medium": [], "large": []}
     scale_gt_counts: dict[str, int] = {"small": 0, "medium": 0, "large": 0}
 
+    fine_scale_tp: dict[str, list[int]] = {"<8": [], "8-16": [], "16-32": [], ">32": []}
+    fine_scale_scores: dict[str, list[float]] = {"<8": [], "8-16": [], "16-32": [], ">32": []}
+    fine_scale_gt_counts: dict[str, int] = {"<8": 0, "8-16": 0, "16-32": 0, ">32": 0}
+
     state_tp: dict[int, list[int]] = {s: [] for s in range(4)}
     state_scores: dict[int, list[float]] = {s: [] for s in range(4)}
     state_gt_counts: dict[int, int] = {s: 0 for s in range(4)}
@@ -354,6 +358,7 @@ def compute_detection_and_attribute_map(
                     class_iou_scores[(c, iou_thresh)].append(float(score))
 
         # Size bins evaluation (IoU=0.50)
+        fine_scale_names = ["<8", "8-16", "16-32", ">32"]
         for g_idx, g_box in enumerate(g_b):
             area = max(g_box[2] - g_box[0], 0.0) * w * max(g_box[3] - g_box[1], 0.0) * h
             side = np.sqrt(max(area, 0.0))
@@ -363,6 +368,20 @@ def compute_detection_and_attribute_map(
                 scale_gt_counts["medium"] += 1
             else:
                 scale_gt_counts["large"] += 1
+
+        # Track Fine scale TL GT counts (class 0)
+        c0_g_mask_all = (g_c == 0)
+        for g_box in g_b[c0_g_mask_all]:
+            area = max(g_box[2] - g_box[0], 0.0) * w * max(g_box[3] - g_box[1], 0.0) * h
+            side = np.sqrt(max(area, 0.0))
+            if side < 8.0:
+                fine_scale_gt_counts["<8"] += 1
+            elif side < 16.0:
+                fine_scale_gt_counts["8-16"] += 1
+            elif side < 32.0:
+                fine_scale_gt_counts["16-32"] += 1
+            else:
+                fine_scale_gt_counts[">32"] += 1
 
         if len(p_b) > 0 and len(g_b) > 0:
             matches_50, _, _ = greedy_iou_match(p_b, p_s, g_b, iou_threshold=0.50)
@@ -383,6 +402,42 @@ def compute_detection_and_attribute_map(
                     bin_name = "small" if side < 32 else ("medium" if side < 96 else "large")
                     scale_tp[bin_name].append(0)
                     scale_scores[bin_name].append(score)
+
+        # Fine-grained scale evaluation for TLs (class 0) at IoU=0.50
+        c0_p_mask_scale = (p_c == 0)
+        c0_g_mask_scale = (g_c == 0)
+        c0_p_boxes_scale = p_b[c0_p_mask_scale]
+        c0_p_scores_scale = p_s[c0_p_mask_scale]
+        c0_g_boxes_scale = g_b[c0_g_mask_scale]
+
+        if len(c0_p_boxes_scale) > 0 and len(c0_g_boxes_scale) > 0:
+            tl_scale_matches, _, _ = greedy_iou_match(
+                c0_p_boxes_scale, c0_p_scores_scale, c0_g_boxes_scale, iou_threshold=0.50
+            )
+            tl_scale_matched = {m.prediction_index: m.target_index for m in tl_scale_matches}
+            for p_i, score in enumerate(c0_p_scores_scale):
+                if p_i in tl_scale_matched:
+                    g_box = c0_g_boxes_scale[tl_scale_matched[p_i]]
+                    area = max(g_box[2] - g_box[0], 0.0) * w * max(g_box[3] - g_box[1], 0.0) * h
+                    side = np.sqrt(max(area, 0.0))
+                    fine_bin = "<8" if side < 8.0 else ("8-16" if side < 16.0 else ("16-32" if side < 32.0 else ">32"))
+                    fine_scale_tp[fine_bin].append(1)
+                    fine_scale_scores[fine_bin].append(float(score))
+                else:
+                    p_box = c0_p_boxes_scale[p_i]
+                    area = max(p_box[2] - p_box[0], 0.0) * w * max(p_box[3] - p_box[1], 0.0) * h
+                    side = np.sqrt(max(area, 0.0))
+                    fine_bin = "<8" if side < 8.0 else ("8-16" if side < 16.0 else ("16-32" if side < 32.0 else ">32"))
+                    fine_scale_tp[fine_bin].append(0)
+                    fine_scale_scores[fine_bin].append(float(score))
+        elif len(c0_p_boxes_scale) > 0:
+            for p_i, score in enumerate(c0_p_scores_scale):
+                p_box = c0_p_boxes_scale[p_i]
+                area = max(p_box[2] - p_box[0], 0.0) * w * max(p_box[3] - p_box[1], 0.0) * h
+                side = np.sqrt(max(area, 0.0))
+                fine_bin = "<8" if side < 8.0 else ("8-16" if side < 16.0 else ("16-32" if side < 32.0 else ">32"))
+                fine_scale_tp[fine_bin].append(0)
+                fine_scale_scores[fine_bin].append(float(score))
 
         # State mAP (for TL c=0 at IoU=0.50)
         if p_state is not None and g_state is not None:
@@ -445,6 +500,27 @@ def compute_detection_and_attribute_map(
         scale_gt_counts["medium"],
     )
 
+    ap_tl_sub8px = compute_ap_from_matches(
+        np.array(fine_scale_tp["<8"], dtype=float),
+        np.array(fine_scale_scores["<8"], dtype=float),
+        fine_scale_gt_counts["<8"],
+    )
+    ap_tl_8_16px = compute_ap_from_matches(
+        np.array(fine_scale_tp["8-16"], dtype=float),
+        np.array(fine_scale_scores["8-16"], dtype=float),
+        fine_scale_gt_counts["8-16"],
+    )
+    ap_tl_16_32px = compute_ap_from_matches(
+        np.array(fine_scale_tp["16-32"], dtype=float),
+        np.array(fine_scale_scores["16-32"], dtype=float),
+        fine_scale_gt_counts["16-32"],
+    )
+    ap_tl_gt32px = compute_ap_from_matches(
+        np.array(fine_scale_tp[">32"], dtype=float),
+        np.array(fine_scale_scores[">32"], dtype=float),
+        fine_scale_gt_counts[">32"],
+    )
+
     state_aps = []
     for s in range(4):
         ap_s = compute_ap_from_matches(
@@ -462,6 +538,10 @@ def compute_detection_and_attribute_map(
         "ap_arrow_50": class_ap50.get(1, 0.0),
         "ap_small": ap_small,
         "ap_medium": ap_medium,
+        "ap_tl_sub8px": ap_tl_sub8px,
+        "ap_tl_8_16px": ap_tl_8_16px,
+        "ap_tl_16_32px": ap_tl_16_32px,
+        "ap_tl_gt32px": ap_tl_gt32px,
         "map_state": map_state,
     }
 
@@ -481,6 +561,21 @@ SIDE_BUCKETS: dict[str, tuple[float, float]] = {
     "6-8": (6.0, 8.0),
     "8-12": (8.0, 12.0),
     ">12": (12.0, float("inf")),
+}
+
+# E37 Fine-Grained Stratified Scale Buckets
+FINE_SIDE_BUCKETS: dict[str, tuple[float, float]] = {
+    "<8": (0.0, 8.0),
+    "8-16": (8.0, 16.0),
+    "16-32": (16.0, 32.0),
+    ">32": (32.0, float("inf")),
+}
+
+FINE_AREA_BUCKETS: dict[str, tuple[float, float]] = {
+    "<64": (0.0, 64.0),
+    "64-256": (64.0, 256.0),
+    "256-1024": (256.0, 1024.0),
+    ">1024": (1024.0, float("inf")),
 }
 
 
@@ -506,8 +601,9 @@ def compute_granular_scale_metrics(
 ) -> dict[str, Any]:
     """Calculate fine-grained detection, recall, AP, and localization metrics across size buckets.
 
-    Supports both area buckets (<32, 32-64, 64-128, 128-256, 256-512, >512 px^2)
-    and minimum side buckets (<4, 4-6, 6-8, 8-12, >12 px).
+    Supports both area buckets (<32, 32-64, 64-128, 128-256, 256-512, >512 px^2),
+    minimum side buckets (<4, 4-6, 6-8, 8-12, >12 px),
+    and E37 fine-grained side/area bins (<8, 8-16, 16-32, >32 px).
     """
     h, w = image_shape
     num_images = len(pred_boxes_list)
@@ -536,6 +632,8 @@ def compute_granular_scale_metrics(
 
     area_stats = _init_bucket_stats(AREA_BUCKETS)
     side_stats = _init_bucket_stats(SIDE_BUCKETS)
+    fine_side_stats = _init_bucket_stats(FINE_SIDE_BUCKETS)
+    fine_area_stats = _init_bucket_stats(FINE_AREA_BUCKETS)
 
     for img_idx in range(num_images):
         p_b = np.asarray(pred_boxes_list[img_idx], dtype=float).reshape(-1, 4)
@@ -557,6 +655,8 @@ def compute_granular_scale_metrics(
         gt_min_sides = []
         gt_area_bucket = []
         gt_side_bucket = []
+        gt_fine_side_bucket = []
+        gt_fine_area_bucket = []
         for gb in c_g_boxes:
             gw = max(gb[2] - gb[0], 0.0) * w
             gh = max(gb[3] - gb[1], 0.0) * h
@@ -566,20 +666,32 @@ def compute_granular_scale_metrics(
             gt_min_sides.append(gm)
             ab = _get_bucket_name(ga, AREA_BUCKETS)
             sb = _get_bucket_name(gm, SIDE_BUCKETS)
+            fsb = _get_bucket_name(gm, FINE_SIDE_BUCKETS)
+            fab = _get_bucket_name(ga, FINE_AREA_BUCKETS)
             gt_area_bucket.append(ab)
             gt_side_bucket.append(sb)
+            gt_fine_side_bucket.append(fsb)
+            gt_fine_area_bucket.append(fab)
             if ab in area_stats:
                 area_stats[ab]["n_gt"] += 1
                 area_stats[ab]["gt_areas"].append(ga)
             if sb in side_stats:
                 side_stats[sb]["n_gt"] += 1
                 side_stats[sb]["gt_min_sides"].append(gm)
+            if fsb in fine_side_stats:
+                fine_side_stats[fsb]["n_gt"] += 1
+                fine_side_stats[fsb]["gt_min_sides"].append(gm)
+            if fab in fine_area_stats:
+                fine_area_stats[fab]["n_gt"] += 1
+                fine_area_stats[fab]["gt_areas"].append(ga)
 
         # Calculate Pred dimensions
         pred_areas = []
         pred_min_sides = []
         pred_area_bucket = []
         pred_side_bucket = []
+        pred_fine_side_bucket = []
+        pred_fine_area_bucket = []
         for pb in c_p_boxes:
             pw = max(pb[2] - pb[0], 0.0) * w
             ph = max(pb[3] - pb[1], 0.0) * h
@@ -589,6 +701,8 @@ def compute_granular_scale_metrics(
             pred_min_sides.append(pm)
             pred_area_bucket.append(_get_bucket_name(pa, AREA_BUCKETS))
             pred_side_bucket.append(_get_bucket_name(pm, SIDE_BUCKETS))
+            pred_fine_side_bucket.append(_get_bucket_name(pm, FINE_SIDE_BUCKETS))
+            pred_fine_area_bucket.append(_get_bucket_name(pa, FINE_AREA_BUCKETS))
 
         # Evaluate across IoU thresholds
         for iou_thresh in iou_thresholds:
@@ -598,12 +712,20 @@ def compute_granular_scale_metrics(
                 for p_i, score in enumerate(c_p_scores):
                     ab = pred_area_bucket[p_i]
                     sb = pred_side_bucket[p_i]
+                    fsb = pred_fine_side_bucket[p_i]
+                    fab = pred_fine_area_bucket[p_i]
                     if ab in area_stats:
                         area_stats[ab]["iou_tps"][iou_thresh].append(0)
                         area_stats[ab]["iou_scores"][iou_thresh].append(float(score))
                     if sb in side_stats:
                         side_stats[sb]["iou_tps"][iou_thresh].append(0)
                         side_stats[sb]["iou_scores"][iou_thresh].append(float(score))
+                    if fsb in fine_side_stats:
+                        fine_side_stats[fsb]["iou_tps"][iou_thresh].append(0)
+                        fine_side_stats[fsb]["iou_scores"][iou_thresh].append(float(score))
+                    if fab in fine_area_stats:
+                        fine_area_stats[fab]["iou_tps"][iou_thresh].append(0)
+                        fine_area_stats[fab]["iou_scores"][iou_thresh].append(float(score))
                 continue
 
             matches, unmatched_preds, _ = greedy_iou_match(
@@ -617,12 +739,20 @@ def compute_granular_scale_metrics(
                     # Target GT bucket determines evaluation bucket
                     ab = gt_area_bucket[gt_i]
                     sb = gt_side_bucket[gt_i]
+                    fsb = gt_fine_side_bucket[gt_i]
+                    fab = gt_fine_area_bucket[gt_i]
                     if ab in area_stats:
                         area_stats[ab]["iou_tps"][iou_thresh].append(1)
                         area_stats[ab]["iou_scores"][iou_thresh].append(float(score))
                     if sb in side_stats:
                         side_stats[sb]["iou_tps"][iou_thresh].append(1)
                         side_stats[sb]["iou_scores"][iou_thresh].append(float(score))
+                    if fsb in fine_side_stats:
+                        fine_side_stats[fsb]["iou_tps"][iou_thresh].append(1)
+                        fine_side_stats[fsb]["iou_scores"][iou_thresh].append(float(score))
+                    if fab in fine_area_stats:
+                        fine_area_stats[fab]["iou_tps"][iou_thresh].append(1)
+                        fine_area_stats[fab]["iou_scores"][iou_thresh].append(float(score))
 
                     # For IoU 0.50, track operational TP / errors
                     if abs(iou_thresh - 0.50) < 1e-4:
@@ -631,6 +761,10 @@ def compute_granular_scale_metrics(
                                 area_stats[ab]["n_tp_conf"] += 1
                             if sb in side_stats:
                                 side_stats[sb]["n_tp_conf"] += 1
+                            if fsb in fine_side_stats:
+                                fine_side_stats[fsb]["n_tp_conf"] += 1
+                            if fab in fine_area_stats:
+                                fine_area_stats[fab]["n_tp_conf"] += 1
 
                         # Localization and scale errors
                         gb = c_g_boxes[gt_i]
@@ -670,10 +804,30 @@ def compute_granular_scale_metrics(
                             side_stats[sb]["delta_h"].append(dh)
                             side_stats[sb]["rel_delta_w"].append(rel_dw)
                             side_stats[sb]["rel_delta_h"].append(rel_dh)
+
+                        if fsb in fine_side_stats:
+                            fine_side_stats[fsb]["delta_x"].append(dx)
+                            fine_side_stats[fsb]["delta_y"].append(dy)
+                            fine_side_stats[fsb]["delta_r"].append(dr)
+                            fine_side_stats[fsb]["delta_w"].append(dw)
+                            fine_side_stats[fsb]["delta_h"].append(dh)
+                            fine_side_stats[fsb]["rel_delta_w"].append(rel_dw)
+                            fine_side_stats[fsb]["rel_delta_h"].append(rel_dh)
+
+                        if fab in fine_area_stats:
+                            fine_area_stats[fab]["delta_x"].append(dx)
+                            fine_area_stats[fab]["delta_y"].append(dy)
+                            fine_area_stats[fab]["delta_r"].append(dr)
+                            fine_area_stats[fab]["delta_w"].append(dw)
+                            fine_area_stats[fab]["delta_h"].append(dh)
+                            fine_area_stats[fab]["rel_delta_w"].append(rel_dw)
+                            fine_area_stats[fab]["rel_delta_h"].append(rel_dh)
                 else:
                     # Unmatched prediction: bucket based on predicted box size
                     ab = pred_area_bucket[p_i]
                     sb = pred_side_bucket[p_i]
+                    fsb = pred_fine_side_bucket[p_i]
+                    fab = pred_fine_area_bucket[p_i]
                     if ab in area_stats:
                         area_stats[ab]["iou_tps"][iou_thresh].append(0)
                         area_stats[ab]["iou_scores"][iou_thresh].append(float(score))
@@ -684,6 +838,16 @@ def compute_granular_scale_metrics(
                         side_stats[sb]["iou_scores"][iou_thresh].append(float(score))
                         if abs(iou_thresh - 0.50) < 1e-4 and score >= conf_threshold:
                             side_stats[sb]["n_fp_conf"] += 1
+                    if fsb in fine_side_stats:
+                        fine_side_stats[fsb]["iou_tps"][iou_thresh].append(0)
+                        fine_side_stats[fsb]["iou_scores"][iou_thresh].append(float(score))
+                        if abs(iou_thresh - 0.50) < 1e-4 and score >= conf_threshold:
+                            fine_side_stats[fsb]["n_fp_conf"] += 1
+                    if fab in fine_area_stats:
+                        fine_area_stats[fab]["iou_tps"][iou_thresh].append(0)
+                        fine_area_stats[fab]["iou_scores"][iou_thresh].append(float(score))
+                        if abs(iou_thresh - 0.50) < 1e-4 and score >= conf_threshold:
+                            fine_area_stats[fab]["n_fp_conf"] += 1
 
     def _summarize_bucket_dict(stats_dict: Mapping[str, Any], is_area: bool) -> dict[str, Any]:
         out = {}
@@ -767,9 +931,12 @@ def compute_granular_scale_metrics(
     return {
         "area_buckets": _summarize_bucket_dict(area_stats, is_area=True),
         "side_buckets": _summarize_bucket_dict(side_stats, is_area=False),
+        "fine_side_buckets": _summarize_bucket_dict(fine_side_stats, is_area=False),
+        "fine_area_buckets": _summarize_bucket_dict(fine_area_stats, is_area=True),
         "p3_stride": p3_stride,
         "p3_cell_area": p3_cell_area,
         "image_shape": image_shape,
         "conf_threshold": conf_threshold,
     }
+
 

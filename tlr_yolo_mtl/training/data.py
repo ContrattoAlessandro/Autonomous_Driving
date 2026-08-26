@@ -17,6 +17,21 @@ from torch.utils.data import Dataset, Sampler
 from ..data.schema import BBox, ImageRecord
 from ..data.transforms import horizontal_flip_record
 from ..data.zoom_augmentation import context_preserving_zoom
+from ..data.scale_matched_augmentation import (
+    DEFAULT_SCALE_QUOTAS,
+    paired_copy_paste,
+    scale_matched_zoom,
+)
+from ..data.photometric_augmentation import (
+    DEFAULT_PHOTOMETRIC_CONFIG,
+    PhotometricAugmentationConfig,
+    apply_physics_photometric_augmentation,
+)
+from ..data.counterfactual_sampling import (
+    DEFAULT_COUNTERFACTUAL_CONFIG,
+    CounterfactualMiningConfig,
+    encode_counterfactual_relevance_targets,
+)
 from ..model.arrows import encode_record_arrows
 from ..model.attributes import encode_record_attributes
 from ..model.context import encode_record_context_gradient
@@ -160,6 +175,16 @@ def prepare_training_sample(
     horizontal_flip: bool = False,
     context_zoom: bool = False,
     zoom_prob: float = 0.5,
+    scale_matched_zoom_enabled: bool = False,
+    scale_quotas: tuple[float, float, float] = DEFAULT_SCALE_QUOTAS,
+    paired_copy_paste_enabled: bool = False,
+    donor_image_rgb: np.ndarray | None = None,
+    donor_record: ImageRecord | None = None,
+    copy_paste_prob: float = 0.35,
+    photometric_suite_enabled: bool = True,
+    photometric_config: PhotometricAugmentationConfig = DEFAULT_PHOTOMETRIC_CONFIG,
+    counterfactual_mining_enabled: bool = False,
+    counterfactual_config: CounterfactualMiningConfig = DEFAULT_COUNTERFACTUAL_CONFIG,
     rng: random.Random | None = None,
 ) -> dict[str, torch.Tensor | str]:
     """Transform one canonical record and every task target atomically."""
@@ -174,17 +199,46 @@ def prepare_training_sample(
     resolved_rng = rng or random.Random()
     transformed_record = record
     transformed_image = image_rgb
-    if training and context_zoom:
+    if training and scale_matched_zoom_enabled:
+        transformed_image, transformed_record = scale_matched_zoom(
+            transformed_image,
+            transformed_record,
+            zoom_prob=zoom_prob,
+            scale_quotas=scale_quotas,
+            rng=resolved_rng,
+        )
+    elif training and context_zoom:
         transformed_image, transformed_record = context_preserving_zoom(
             transformed_image,
             transformed_record,
             zoom_prob=zoom_prob,
             rng=resolved_rng,
         )
+    if (
+        training
+        and paired_copy_paste_enabled
+        and donor_image_rgb is not None
+        and donor_record is not None
+    ):
+        transformed_image, transformed_record = paired_copy_paste(
+            transformed_image,
+            transformed_record,
+            donor_image_rgb,
+            donor_record,
+            copy_paste_prob=copy_paste_prob,
+            rng=resolved_rng,
+        )
     if training and horizontal_flip and resolved_rng.random() < 0.5:
         transformed_image = np.ascontiguousarray(transformed_image[:, ::-1])
         transformed_record = horizontal_flip_record(transformed_record)
-    if training:
+    if training and photometric_suite_enabled:
+        transformed_image = apply_physics_photometric_augmentation(
+            transformed_image,
+            transformed_record,
+            config=photometric_config,
+            rng=resolved_rng,
+        )
+    elif training:
         transformed_image = _photometric_augment(transformed_image, resolved_rng)
 
     scale, left, top, resized_width, resized_height = letterbox_parameters(
@@ -227,6 +281,21 @@ def prepare_training_sample(
     context = encode_record_context_gradient(transformed_record)
     unified = encode_record_unified(transformed_record)
     object_boxes = torch.cat((traffic_boxes, arrow_boxes), dim=0)
+
+    if (counterfactual_mining_enabled or (training and counterfactual_config.enabled)) and transformed_record.traffic_lights:
+        cf_targets = encode_counterfactual_relevance_targets(
+            transformed_record,
+            config=counterfactual_config,
+            rng=resolved_rng,
+        )
+    else:
+        num_tls = len(transformed_record.traffic_lights)
+        cf_targets = {
+            "counterfactual_weights": torch.ones(num_tls, dtype=torch.float32),
+            "counterfactual_confuser_mask": torch.zeros(num_tls, dtype=torch.bool),
+            "is_hard_negative": torch.zeros(num_tls, dtype=torch.bool),
+        }
+
     return {
         "image": image_tensor,
         "image_id": transformed_record.image_id,
@@ -241,6 +310,9 @@ def prepare_training_sample(
         "arrow_direction": arrows["arrow_direction"],
         "arrow_detection_valid": arrows["arrow_detection_valid"],
         "ignore_bboxes": ignore_boxes,
+        "counterfactual_weights": cf_targets["counterfactual_weights"],
+        "counterfactual_confuser_mask": cf_targets["counterfactual_confuser_mask"],
+        "is_hard_negative": cf_targets["is_hard_negative"],
         # Active architecture: one ordered GT stream for both object types.
         "object_cls": unified["object_cls"],
         "object_bboxes": object_boxes,
@@ -253,6 +325,7 @@ def prepare_training_sample(
         "traffic_relevance_valid": unified["traffic_relevance_valid"],
         **context,
     }
+
 
 
 class CanonicalMultiTaskDataset(Dataset[dict[str, torch.Tensor | str]]):
@@ -268,6 +341,14 @@ class CanonicalMultiTaskDataset(Dataset[dict[str, torch.Tensor | str]]):
         horizontal_flip: bool = False,
         context_zoom: bool = False,
         zoom_prob: float = 0.5,
+        scale_matched_zoom: bool = False,
+        scale_quotas: tuple[float, float, float] = DEFAULT_SCALE_QUOTAS,
+        paired_copy_paste: bool = False,
+        copy_paste_prob: float = 0.35,
+        photometric_suite: bool = True,
+        photometric_config: PhotometricAugmentationConfig = DEFAULT_PHOTOMETRIC_CONFIG,
+        counterfactual_mining: bool = False,
+        counterfactual_config: CounterfactualMiningConfig = DEFAULT_COUNTERFACTUAL_CONFIG,
         seed: int = 42,
         allowed_sources: Sequence[str] = ("DTLD", "ATLAS", "LISA"),
         require_paired: bool = False,
@@ -279,6 +360,14 @@ class CanonicalMultiTaskDataset(Dataset[dict[str, torch.Tensor | str]]):
         self.horizontal_flip = bool(horizontal_flip)
         self.context_zoom = bool(context_zoom)
         self.zoom_prob = float(zoom_prob)
+        self.scale_matched_zoom = bool(scale_matched_zoom)
+        self.scale_quotas = scale_quotas
+        self.paired_copy_paste = bool(paired_copy_paste)
+        self.copy_paste_prob = float(copy_paste_prob)
+        self.photometric_suite = bool(photometric_suite)
+        self.photometric_config = photometric_config
+        self.counterfactual_mining = bool(counterfactual_mining)
+        self.counterfactual_config = counterfactual_config
         self.seed = int(seed)
         self.epoch = 0
         self.allowed_sources = frozenset(allowed_sources)
@@ -349,6 +438,20 @@ class CanonicalMultiTaskDataset(Dataset[dict[str, torch.Tensor | str]]):
             raise FileNotFoundError(f"cannot read training image: {record.image_path}")
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         rng = random.Random(self.seed + self.epoch * len(self.entries) + index)
+
+        donor_image: np.ndarray | None = None
+        donor_record: ImageRecord | None = None
+        if self.training and self.paired_copy_paste and len(self.entries) > 1:
+            donor_idx = rng.randrange(len(self.entries))
+            if donor_idx == index:
+                donor_idx = (index + 1) % len(self.entries)
+            donor_rec = self._record(donor_idx)
+            if donor_rec.traffic_lights:
+                donor_img = cv2.imread(donor_rec.image_path, cv2.IMREAD_COLOR)
+                if donor_img is not None:
+                    donor_image = cv2.cvtColor(donor_img, cv2.COLOR_BGR2RGB)
+                    donor_record = donor_rec
+
         return prepare_training_sample(
             image,
             record,
@@ -357,6 +460,16 @@ class CanonicalMultiTaskDataset(Dataset[dict[str, torch.Tensor | str]]):
             horizontal_flip=self.horizontal_flip,
             context_zoom=self.context_zoom,
             zoom_prob=self.zoom_prob,
+            scale_matched_zoom_enabled=self.scale_matched_zoom,
+            scale_quotas=self.scale_quotas,
+            paired_copy_paste_enabled=self.paired_copy_paste,
+            donor_image_rgb=donor_image,
+            donor_record=donor_record,
+            copy_paste_prob=self.copy_paste_prob,
+            photometric_suite_enabled=self.photometric_suite,
+            photometric_config=self.photometric_config,
+            counterfactual_mining_enabled=self.counterfactual_mining,
+            counterfactual_config=self.counterfactual_config,
             rng=rng,
         )
 
@@ -412,6 +525,9 @@ def canonical_multitask_collate(
         ),
         "ignore_batch_idx": instance_indices("ignore_bboxes"),
         "ignore_bboxes": concatenate("ignore_bboxes", width=4),
+        "counterfactual_weights": concatenate("counterfactual_weights"),
+        "counterfactual_confuser_mask": concatenate("counterfactual_confuser_mask"),
+        "is_hard_negative": concatenate("is_hard_negative"),
         "object_batch_idx": instance_indices("object_bboxes"),
         "object_cls": concatenate("object_cls", width=1),
         "object_bboxes": concatenate("object_bboxes", width=4),
@@ -433,6 +549,7 @@ def canonical_multitask_collate(
             [sample["relevance_arrow_context_paired"] for sample in samples]
         ),
     }
+
 
 
 class BalancedEffectiveBatchSampler(Sampler[list[int]]):

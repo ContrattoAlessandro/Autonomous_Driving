@@ -33,8 +33,9 @@ def evaluate_validation_epoch(
     device: torch.device,
     amp_enabled: bool = True,
     max_batches: int | None = None,
-    conf_threshold: float = 0.05,
+    conf_threshold: float = 0.001,
     iou_threshold: float = 0.6,
+    max_detections: int = 300,
     granular_scale_metrics: bool = False,
 ) -> dict[str, Any]:
     """Run validation pass, computing mAP, attributes, relevance metrics and composite score."""
@@ -145,7 +146,7 @@ def evaluate_validation_epoch(
                         boxes_xyxy_px = xywh_to_xyxy(boxes_xywh)
                         kept_nms = torchvision.ops.nms(
                             boxes_xyxy_px, scores_c[c_indices], iou_threshold
-                        )[:100]
+                        )[:max_detections]
                         kept_dense = c_indices[kept_nms]
                         kept_px = boxes_xyxy_px[kept_nms]
                         norm_scale = torch.tensor(

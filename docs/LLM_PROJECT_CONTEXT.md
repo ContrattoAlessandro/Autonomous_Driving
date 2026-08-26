@@ -82,6 +82,12 @@ flowchart TD
 7. **Ticket E32 — Deconfounded Zoom Augmentation & Hard Sampling**:
    - Context-preserving zoom ($1.2\times - 2.0\times$ scale) with hard sampling weights $[0.50, 0.30, 0.20]$ (tiny/distractor, directional, standard) prevents scale bias while preserving traffic light / road arrow geometric perspective.
 
+8. **Phase 5 Frontiers (Tickets E37–E46)**:
+   - **E37 (Evaluation Decoupling)**: Rigorous separation of PR benchmark evaluation ($\tau_{\text{conf}}=0.001$) from operational deployment ($\tau_{\text{conf}}=0.25$).
+   - **E38–E40 (High-Resolution Representation)**: Scale-Matched Paired Augmentation, Photometric Bloom Augmentation, and DySample $P3 \to P2$ Dynamic Upsampling for sub-8px traffic lights.
+   - **E41–E43 (Task Gating, Geometry Bias & Counterfactual Sampling)**: Task-specific $P2/P3$ gated fusion + $5\times5$ State ROIAlign, explicit relative spatial bias in Cross-Attention matrix ($\mathbf{A}_{ij} = \frac{\mathbf{q}_i^\top \mathbf{k}_j}{\sqrt{d}} + \text{MLP}(\boldsymbol{\phi}_{ij})$), and scene-coherent hard negative counterfactual sampling.
+   - **E44–E46 (Long-Tail & Multi-Task Gradient Dynamics)**: Class-Balanced Focal Softmax on long-tail states, Size-Adaptive Gaussian NWD Suppression in deployment post-processing, and Multi-Task Gradient Conflict Diagnostics confirming strong backbone/neck synergy ($\cos = +0.22 - +0.31$) with Neck-Restricted PCGrad for conflict-free multi-task training.
+
 ---
 
 ## 4. End-to-End Champion Architecture

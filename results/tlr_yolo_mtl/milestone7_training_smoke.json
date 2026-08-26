@@ -15,7 +15,7 @@
     "DTLD/train/DE_BBBR667_2015-04-24_13-39-59-840751_k0"
   ],
   "model_variant": "yolo11n",
-  "parameters": 2776091,
+  "parameters": 2781470,
   "p2_enabled": false,
   "context_paired_images": 2,
   "context_gradient_scales": [

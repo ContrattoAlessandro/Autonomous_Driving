@@ -146,8 +146,8 @@ def run_test_inference_pipeline(
         collate_fn=canonical_multitask_collate,
     )
 
-    # 2. Run Comprehensive Quantitative Evaluation with NMS
-    print("\n[Step 1/3] Running Quantitative Evaluation across multi-task heads...")
+    # 2. Run Comprehensive Quantitative Evaluation with NMS (Decoupled PR evaluation at conf=0.001)
+    print("\n[Step 1/3] Running Quantitative Evaluation across multi-task heads (conf_eval=0.001)...")
     t0 = time.time()
     eval_results = evaluate_validation_epoch(
         model,
@@ -156,7 +156,7 @@ def run_test_inference_pipeline(
         device=device,
         amp_enabled=True,
         max_batches=max_batches,
-        conf_threshold=conf_threshold,
+        conf_threshold=0.001,
         iou_threshold=iou_threshold,
         granular_scale_metrics=True,
     )
@@ -172,12 +172,15 @@ def run_test_inference_pipeline(
 
     print(f"\n--- EVALUATION COMPLETED IN {eval_time:.2f}s ({fps:.1f} FPS su {num_samples} immagini) ---")
     print(f"★ COMPOSITE SELECTION SCORE: {score:.4f}")
-    print("\n[1. METRICHE DETECTION (mAP con Postprocessing NMS)]")
+    print("\n[1. METRICHE DETECTION (Standard Evaluation PR Curve conf=0.001)]")
     print(f"  • mAP@50 (Globale)          : {det['map50']:.4f} ({det['map50']:.1%})")
     print(f"  • mAP@50-95 (Globale)       : {det['map50_95']:.4f} ({det['map50_95']:.1%})")
     print(f"  • AP Traffic Lights @50     : {det['ap_tl_50']:.4f} ({det['ap_tl_50']:.1%})")
     print(f"  • AP Road Arrows @50        : {det['ap_arrow_50']:.4f} ({det['ap_arrow_50']:.1%})")
     print(f"  • AP Tiny Lights (Small)    : {det['ap_small']:.4f} ({det['ap_small']:.1%})")
+    print(f"  • AP TL Sub-8px (<8px)      : {det.get('ap_tl_sub8px', 0.0):.4f} ({det.get('ap_tl_sub8px', 0.0):.1%})")
+    print(f"  • AP TL 8-16px              : {det.get('ap_tl_8_16px', 0.0):.4f} ({det.get('ap_tl_8_16px', 0.0):.1%})")
+    print(f"  • AP TL 16-32px             : {det.get('ap_tl_16_32px', 0.0):.4f} ({det.get('ap_tl_16_32px', 0.0):.1%})")
     print(f"  • AP Medium Lights/Arrows   : {det['ap_medium']:.4f} ({det['ap_medium']:.1%})")
     print(f"  • mAP State Joint           : {det['map_state']:.4f} ({det['map_state']:.1%})")
 

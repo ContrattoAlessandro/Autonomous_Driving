@@ -207,8 +207,10 @@ def assigned_attribute_cross_entropy(
     *,
     gamma: float = 0.0,
     class_weights: torch.Tensor | None = None,
+    log_priors: torch.Tensor | None = None,
+    prior_scale: float = 1.0,
 ) -> tuple[torch.Tensor, int]:
-    """Optionally focal cross-entropy on valid detector-positive matches."""
+    """Optionally focal cross-entropy on valid detector-positive matches with optional log priors and class weights."""
 
     if logits.ndim != 3:
         raise ValueError("attribute logits must have shape [batch, classes, anchors]")
@@ -237,6 +239,11 @@ def assigned_attribute_cross_entropy(
         weights = class_weights.to(device=logits.device, dtype=logits.dtype)
         if weights.numel() != logits.shape[1]:
             raise ValueError("class weights must contain one value per class")
+    if log_priors is not None:
+        lp = log_priors.to(device=logits.device, dtype=logits.dtype)
+        if lp.numel() != logits.shape[1]:
+            raise ValueError("log priors must contain one value per class")
+        selected_logits = selected_logits + float(prior_scale) * lp.unsqueeze(0)
     cross_entropy = F.cross_entropy(
         selected_logits, selected_targets, weight=weights, reduction="none"
     )
@@ -246,6 +253,7 @@ def assigned_attribute_cross_entropy(
         ).squeeze(1)
         cross_entropy = cross_entropy * (1.0 - target_probabilities).pow(gamma)
     return cross_entropy.mean(), count
+
 
 
 def gather_candidate_attributes(

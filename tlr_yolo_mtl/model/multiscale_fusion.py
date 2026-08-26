@@ -40,13 +40,13 @@ class MultiScaleCandidateFeatureExtractor(nn.Module):
         mode: str = "p2_p3_fused",
     ) -> None:
         super().__init__()
-        if mode not in {"p2_only", "p3_only", "p2_p3_fused", "p2_p3_p4_fused"}:
+        if mode not in {"p2_only", "p3_only", "p2_p3_fused", "p2_p3_p4_fused", "task_gated_p2_p3"}:
             raise ValueError(f"unknown multi-scale extraction mode: {mode}")
         self.token_feature_dim = int(token_feature_dim)
         self.out_feature_dim = int(out_feature_dim)
         self.mode = mode
 
-        num_levels = 2 if mode == "p2_p3_fused" else (3 if mode == "p2_p3_p4_fused" else 1)
+        num_levels = 2 if mode in {"p2_p3_fused", "task_gated_p2_p3"} else (3 if mode == "p2_p3_p4_fused" else 1)
         in_dim = num_levels * self.token_feature_dim
 
         self.fusion = nn.Sequential(
@@ -54,6 +54,10 @@ class MultiScaleCandidateFeatureExtractor(nn.Module):
             nn.Linear(in_dim, self.out_feature_dim),
             nn.SiLU(inplace=True),
         )
+        if mode == "task_gated_p2_p3":
+            self.gate_param = nn.Parameter(torch.tensor(0.0))
+        else:
+            self.register_parameter("gate_param", None)
 
     def _sample_level(self, feature_map: torch.Tensor, normalized_centers: torch.Tensor) -> torch.Tensor:
         """Sample feature map at normalized center coordinates [0, 1] using bilinear grid_sample.
@@ -104,6 +108,12 @@ class MultiScaleCandidateFeatureExtractor(nn.Module):
             f_p2 = self._sample_level(p2_map, centers)
             f_p3 = self._sample_level(p3_map, centers)
             concatenated = torch.cat((f_p2, f_p3), dim=-1)
+            return self.fusion(concatenated)
+        elif self.mode == "task_gated_p2_p3":
+            f_p2 = self._sample_level(p2_map, centers)
+            f_p3 = self._sample_level(p3_map, centers)
+            gate = torch.sigmoid(self.gate_param) if self.gate_param is not None else 0.5
+            concatenated = torch.cat((f_p2 * (2.0 * gate), f_p3 * (2.0 * (1.0 - gate))), dim=-1)
             return self.fusion(concatenated)
         elif self.mode == "p2_p3_p4_fused":
             p4_map = pyramid_features[2]

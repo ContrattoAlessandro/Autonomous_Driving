@@ -115,7 +115,7 @@
     "attention_gate_initial_value": 0.0,
     "local_fallback_exact_at_initialization": true,
     "separate_arrow_detector": false,
-    "parameters": 2776091,
+    "parameters": 2781470,
     "parameter_groups": {
       "unified_detect": 431046,
       "factorized_attributes": 23771,
@@ -123,6 +123,6 @@
       "cross_attention": 66790,
       "relevance": 38404
     },
-    "peak_memory_bytes": 82607104
+    "peak_memory_bytes": 82679296
   }
 }

@@ -229,14 +229,14 @@ def evaluate_checkpoint_unified(
 ) -> tuple[dict[str, Any], list[SampleRecord], SafetyWaterfallBreakdown]:
     """Run unified evaluation and collect sample records for calibration and safety waterfall."""
 
-    # 1. Standard multi-task epoch evaluation
+    # 1. Standard multi-task epoch evaluation (E37 Standard: conf_eval=0.001 for full PR curve)
     val_results = evaluate_validation_epoch(
         model,
         val_loader,
         device=device,
         amp_enabled=(contract.precision == "fp16"),
         max_batches=max_batches,
-        conf_threshold=0.05,
+        conf_threshold=0.001,
         iou_threshold=contract.iou_threshold,
         granular_scale_metrics=True,
     )

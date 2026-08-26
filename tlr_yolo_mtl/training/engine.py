@@ -18,6 +18,10 @@ from torch import nn
 from torch.utils.data import DataLoader
 
 from ..evaluation import evaluate_validation_epoch
+from ..model.geometry_attention import (
+    GeometryAwareUnifiedDetect,
+    attach_geometry_aware_unified_relevance_head,
+)
 from ..model.milestone2 import build_detection_model, load_coco_warmstart
 from ..model.unified import (
     UnifiedHeadConfig,
@@ -389,20 +393,42 @@ def _loss_weights(config: Mapping[str, Any]) -> MultiTaskLossWeights:
 def build_multitask_criterion(
     model: nn.Module, config: Mapping[str, Any]
 ) -> TLRMultiTaskCriterion:
-    loss = config["loss"]
+    loss = config.get("loss", {})
     tal_assigner_cfg = config.get("tal_assigner", {})
     tal_assigner_type = tal_assigner_cfg.get("type", "standard") if isinstance(tal_assigner_cfg, Mapping) else "standard"
+    state_loss_type = loss.get("state_loss_type", "focal")
+    state_beta = float(loss.get("state_beta", 0.9999))
+    state_prior_scale = float(loss.get("state_prior_scale", 1.0))
+    distillation_cfg = config.get("distillation")
+    quality_cfg = (
+        config.get("quality_head")
+        or config.get("architecture", {}).get("quality_head")
+        or config.get("architecture", {}).get("nwd_quality_head")
+    )
+    refinement_cfg = (
+        config.get("sparse_refinement")
+        or config.get("architecture", {}).get("sparse_refinement")
+    )
+    temporal_cfg = config.get("temporal_distillation")
     return TLRMultiTaskCriterion(
         model,
         weights=_loss_weights(config),
-        attribute_gamma=float(loss["attribute_focal_gamma"]),
-        maneuver_gamma=float(loss["maneuver_focal_gamma"]),
-        ego_lane_gamma=float(loss["ego_lane_focal_gamma"]),
-        relevance_gamma=float(loss["relevance_focal_gamma"]),
-        nwd_constant=float(loss["nwd_constant"]),
+        state_loss_type=state_loss_type,
+        state_beta=state_beta,
+        state_prior_scale=state_prior_scale,
+        attribute_gamma=float(loss.get("attribute_focal_gamma", 1.5)),
+        maneuver_gamma=float(loss.get("maneuver_focal_gamma", 2.0)),
+        ego_lane_gamma=float(loss.get("ego_lane_focal_gamma", 2.0)),
+        relevance_gamma=float(loss.get("relevance_focal_gamma", 2.0)),
+        nwd_constant=float(loss.get("nwd_constant", 12.0)),
         tal_assigner_type=tal_assigner_type,
         tal_assigner_config=tal_assigner_cfg if isinstance(tal_assigner_cfg, Mapping) and tal_assigner_cfg else None,
+        distillation_config=distillation_cfg if isinstance(distillation_cfg, Mapping) and distillation_cfg else None,
+        quality_config=quality_cfg if isinstance(quality_cfg, Mapping) and quality_cfg else None,
+        refinement_config=refinement_cfg if isinstance(refinement_cfg, Mapping) and refinement_cfg else None,
+        temporal_distillation_config=temporal_cfg if isinstance(temporal_cfg, Mapping) and temporal_cfg else None,
     )
+
 
 
 
@@ -415,6 +441,11 @@ _LOSS_COMPONENT_NAMES = (
     "relevance",
     "nwd",
     "association",
+    "contrastive",
+    "distillation",
+    "quality",
+    "refinement",
+    "temporal_distillation",
     "total",
 )
 
@@ -423,6 +454,7 @@ def _loss_snapshot(losses: Any) -> dict[str, float]:
     return {
         name: float(getattr(losses, name).detach().float())
         for name in _LOSS_COMPONENT_NAMES
+        if hasattr(losses, name) and getattr(losses, name) is not None
     }
 
 
@@ -480,10 +512,20 @@ def build_training_components(
         k: v for k, v in arch.items()
         if k in UnifiedHeadConfig.__dataclass_fields__
     }
-    attach_unified_relevance_head(
-        wrapper,
-        config=UnifiedHeadConfig(**head_kwargs),
-    )
+    if arch.get("geometry_attention", {}).get("enabled", False):
+        geom_cfg = arch.get("geometry_attention", {})
+        attach_geometry_aware_unified_relevance_head(
+            wrapper,
+            config=UnifiedHeadConfig(**head_kwargs),
+            hidden_dim=int(geom_cfg.get("hidden_dim", 32)),
+            p_drop=float(geom_cfg.get("p_drop", 0.0)),
+            use_confidence_gating=bool(geom_cfg.get("use_confidence_gate", True)),
+        )
+    else:
+        attach_unified_relevance_head(
+            wrapper,
+            config=UnifiedHeadConfig(**head_kwargs),
+        )
     assert_active_pyramid(
         wrapper.model, p2_enabled=bool(config.get("p2_enabled", False))
     )
