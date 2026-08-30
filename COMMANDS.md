@@ -1,4 +1,4 @@
-# Canonical Command Reference (TLR-YOLO-MTL Champion v4)
+# Canonical Command Reference (TLR-YOLO-MTL Champion v3)
 
 Execute all commands from the `tl_detection/` directory within the activated virtual environment.
 
@@ -24,7 +24,7 @@ Environment Specifications:
 ## 2. Verification & Smoke Checks
 
 ```powershell
-# Run the complete unit and integration test suite (154/154 tests)
+# Run the complete unit and integration test suite (102/102 tests)
 .\.venv\Scripts\python.exe -m unittest discover -s tests
 
 # Check model architecture graph and P2-P5 pyramid layers
@@ -39,13 +39,13 @@ Environment Specifications:
 
 ---
 
-## 3. Production Model Training (Champion v4)
+## 3. Production Model Training (Champion v3)
 
 ```powershell
-# Launch full 50-epoch joint single-phase training run
+# Launch full joint single-phase training run
 .\.venv\Scripts\python.exe -B scripts/train_tlr_yolo_mtl.py `
-  --config configs/tlr_yolo11s_champion_v4.yaml `
-  --output-dir runs/tlr_yolo11s_champion_v4 `
+  --config configs/tlr_yolo11s_champion_v3.yaml `
+  --output-dir runs/tlr_yolo11s_champion_v3 `
   --overwrite
 ```
 
@@ -53,7 +53,7 @@ Training Specifications:
 - **Input Size**: `960x1920` (Native 2:1 aspect ratio)
 - **Batch Policy**: Physical micro-batch 4, accumulated over 8 steps = Effective batch 32
 - **Precision**: Mixed Precision AMP FP16
-- **Checkpoints**: Saved to `runs/tlr_yolo11s_champion_v4/weights/` (`best_composite.pt`, `best_tl_detection.pt`, `best_relevance.pt`, `last.pt`)
+- **Checkpoints**: Saved to `runs/tlr_yolo11s_champion_v3/weights/` (`best_composite.pt`, `best_tl_detection.pt`, `best_relevance.pt`, `last.pt`)
 
 ---
 
@@ -62,8 +62,8 @@ Training Specifications:
 ```powershell
 # Run official Unified Evaluation Contract on full DTLD validation split
 .\.venv\Scripts\python.exe -B scripts/unified_evaluation_contract.py `
-  --weights runs/tlr_yolo11s_champion_v4/weights/best_composite.pt `
-  --config configs/tlr_yolo11s_champion_v4.yaml
+  --weights runs/tlr_yolo11s_champion_v3/weights/best_composite.pt `
+  --config configs/tlr_yolo11s_champion_v3.yaml
 ```
 
 ---
@@ -73,7 +73,7 @@ Training Specifications:
 ```powershell
 # Run visual inference on test images with bounding boxes, states, and relevance links
 .\.venv\Scripts\python.exe -B scripts/test_model_on_images.py `
-  --weights runs/tlr_yolo11s_champion_v4/weights/best_composite.pt `
+  --weights runs/tlr_yolo11s_champion_v3/weights/best_composite.pt `
   --images datasets/tlr_mtl_dtld_paired/images/val `
   --output-dir results/inspect `
   --conf 0.25 `

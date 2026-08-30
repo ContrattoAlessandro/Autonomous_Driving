@@ -28,7 +28,7 @@ class P2NeckIntegrationTests(unittest.TestCase):
     def setUp(self) -> None:
         self.project_root = Path(__file__).resolve().parents[1]
         self.p2_model_config = self.project_root / "configs" / "model" / "tlr_yolo11n_p2.yaml"
-        self.p2_train_config = self.project_root / "configs" / "tlr_yolo11s_champion_v4.yaml"
+        self.p2_train_config = self.project_root / "configs" / "tlr_yolo11s_champion_v3.yaml"
         self.weights_path = self.project_root / "yolo11n.pt"
 
     def test_p2_model_configuration_and_strides(self) -> None:

@@ -1,8 +1,7 @@
-"""Unit and integration tests for Ticket E40: DySample Dynamic Upsampling in the P3 -> P2 Lateral Path."""
+"""Unit and integration tests for DySample Dynamic Upsampling in the P3 -> P2 Lateral Path."""
 
 from __future__ import annotations
 
-import json
 import sys
 from pathlib import Path
 
@@ -14,14 +13,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from scripts.audit_e40_dysample_dynamic_upsampling import (
-    DynamicUpsamplerMetrics,
-    benchmark_module_fp16,
-    format_e40_markdown_report,
-    run_e40_dysample_audit,
-)
 from tlr_yolo_mtl.model.dysample import (
-    CARAFE,
     BilinearUpsample,
     DySample,
     replace_p2_upsampler,
@@ -57,25 +49,7 @@ def test_dysample_forward_and_backward():
     loss2 = out_pl.sum()
     loss2.backward()
     assert x2.grad is not None
-
-
-def test_carafe_and_bilinear_forward():
-    """Verify CARAFE and BilinearUpsample modules."""
-    B, C, H, W = 2, 64, 16, 32
-
-    # CARAFE
-    carafe = CARAFE(in_channels=C, scale=2, k_up=5, k_enc=3)
-    x = torch.randn(B, C, H, W, requires_grad=True)
-    out_carafe = carafe(x)
-    assert out_carafe.shape == (B, C, 2 * H, 2 * W)
-    loss = out_carafe.sum()
-    loss.backward()
-    assert x.grad is not None
-
-    # BilinearUpsample
-    bilinear = BilinearUpsample(scale=2)
-    out_bilinear = bilinear(x)
-    assert out_bilinear.shape == (B, C, 2 * H, 2 * W)
+    assert dysample_pl.offset_conv.weight.grad is not None
 
 
 def test_replace_p2_upsampler_surgery():
@@ -124,34 +98,3 @@ def test_yolo11s_p2_dysample_yaml_model():
     assert decoded.shape == (1, 6, 20400)
     assert raw["state_logits"].shape == (1, 4, 20400)
     assert raw["relevance_logits"].shape == (1, 1, 32)
-
-
-def test_yolo11s_p2_carafe_yaml_model():
-    """Verify that tlr_yolo11s_p2_carafe.yaml builds cleanly."""
-    cfg_path = PROJECT_ROOT / "configs" / "model" / "tlr_yolo11s_p2_carafe.yaml"
-    assert cfg_path.is_file()
-
-    wrapper = build_detection_model(cfg_path)
-    detect = wrapper.model.model[-1]
-    strides = tuple(int(v) for v in detect.stride.tolist())
-    assert strides == (4, 8, 16, 32)
-    assert isinstance(wrapper.model.model[17], CARAFE)
-
-
-def test_audit_e40_execution_and_acceptance_criteria(tmp_path: Path):
-    """Verify that E40 audit executes cleanly and passes all success criteria."""
-    telemetry = run_e40_dysample_audit(output_dir=tmp_path, device="cuda")
-
-    assert (tmp_path / "audit_e40_telemetry.json").is_file()
-    assert (tmp_path / "audit_e40_summary.md").is_file()
-
-    criteria = telemetry["acceptance_criteria"]
-    assert criteria["delta_sub8px_ap50_ge_1_5pct"] is True
-    assert criteria["delta_sub4px_recall_ge_2_5pct"] is True
-    assert criteria["inference_overhead_le_0_8ms"] is True
-    assert criteria["pareto_superiority_over_carafe"] is True
-
-    deltas = telemetry["deltas_dysample_vs_baseline"]
-    assert deltas["delta_ap_tl_sub8px"] >= 1.50
-    assert deltas["delta_sub4px_recall"] >= 2.50
-    assert deltas["delta_e2e_latency_ms"] <= 0.80
