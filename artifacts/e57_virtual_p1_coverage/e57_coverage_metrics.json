@@ -1,0 +1,154 @@
+{
+  "ticket": "E57",
+  "title": "Virtual-P1 Refinement Coverage & Candidate Budget Audit",
+  "timestamp": "2026-08-26T11:56:38Z",
+  "total_val_images": 8991,
+  "total_gt_tls": 25344,
+  "budget_coverage_breakdown": [
+    {
+      "scale_bin": "Sub-4px (<16 px^2)",
+      "gt_total": 2842,
+      "gt_with_candidate": 1489,
+      "coverage_k8": 42.1,
+      "coverage_k16": 68.4,
+      "coverage_k32": 89.2,
+      "coverage_k48": 94.8,
+      "coverage_k64": 97.4,
+      "coverage_k96": 99.1,
+      "coverage_k128": 99.7,
+      "exclusion_rate_k32_pct": 10.8,
+      "excluded_count_k32": 161
+    },
+    {
+      "scale_bin": "4-8px (16-64 px^2)",
+      "gt_total": 8416,
+      "gt_with_candidate": 7785,
+      "coverage_k8": 62.5,
+      "coverage_k16": 84.8,
+      "coverage_k32": 95.8,
+      "coverage_k48": 98.4,
+      "coverage_k64": 99.3,
+      "coverage_k96": 99.8,
+      "coverage_k128": 100.0,
+      "exclusion_rate_k32_pct": 4.2,
+      "excluded_count_k32": 327
+    },
+    {
+      "scale_bin": "8-16px (64-256 px^2)",
+      "gt_total": 9120,
+      "gt_with_candidate": 8992,
+      "coverage_k8": 78.2,
+      "coverage_k16": 92.4,
+      "coverage_k32": 98.6,
+      "coverage_k48": 99.6,
+      "coverage_k64": 99.9,
+      "coverage_k96": 100.0,
+      "coverage_k128": 100.0,
+      "exclusion_rate_k32_pct": 1.4,
+      "excluded_count_k32": 126
+    },
+    {
+      "scale_bin": ">16px (>=256 px^2)",
+      "gt_total": 4966,
+      "gt_with_candidate": 4948,
+      "coverage_k8": 89.4,
+      "coverage_k16": 97.2,
+      "coverage_k32": 99.7,
+      "coverage_k48": 99.95,
+      "coverage_k64": 100.0,
+      "coverage_k96": 100.0,
+      "coverage_k128": 100.0,
+      "exclusion_rate_k32_pct": 0.3,
+      "excluded_count_k32": 15
+    }
+  ],
+  "density_exclusion_breakdown": [
+    {
+      "density_tier": "Sparse (<5 TLs)",
+      "scene_count": 4180,
+      "gt_count": 10800,
+      "avg_tls_per_scene": 2.58,
+      "avg_candidates_per_scene": 8.4,
+      "sub4px_coverage_k32_pct": 98.8,
+      "sub4px_exclusion_k32_pct": 1.2,
+      "sub8px_coverage_k32_pct": 99.4,
+      "sub8px_exclusion_k32_pct": 0.6,
+      "all_scale_exclusion_k32_pct": 0.45,
+      "excluded_sub8px_instances": 28
+    },
+    {
+      "density_tier": "Medium (5-12 TLs)",
+      "scene_count": 1420,
+      "gt_count": 10200,
+      "avg_tls_per_scene": 7.18,
+      "avg_candidates_per_scene": 24.6,
+      "sub4px_coverage_k32_pct": 91.4,
+      "sub4px_exclusion_k32_pct": 8.6,
+      "sub8px_coverage_k32_pct": 96.1,
+      "sub8px_exclusion_k32_pct": 3.9,
+      "all_scale_exclusion_k32_pct": 2.7,
+      "excluded_sub8px_instances": 178
+    },
+    {
+      "density_tier": "Dense (>12 TLs)",
+      "scene_count": 362,
+      "gt_count": 4344,
+      "avg_tls_per_scene": 12.0,
+      "avg_candidates_per_scene": 48.2,
+      "sub4px_coverage_k32_pct": 86.2,
+      "sub4px_exclusion_k32_pct": 13.8,
+      "sub8px_coverage_k32_pct": 91.8,
+      "sub8px_exclusion_k32_pct": 8.2,
+      "all_scale_exclusion_k32_pct": 6.45,
+      "excluded_sub8px_instances": 282
+    }
+  ],
+  "latency_tradeoffs": [
+    {
+      "budget_strategy": "Static K=16",
+      "avg_k_evaluated": 16.0,
+      "sub4px_dense_coverage_pct": 64.2,
+      "sub8px_dense_coverage_pct": 78.4,
+      "refinement_latency_ms": 0.22,
+      "fps_rtx5070": 36.95,
+      "vram_mb": 412.0
+    },
+    {
+      "budget_strategy": "Static K=32 (Baseline Champion v4)",
+      "avg_k_evaluated": 32.0,
+      "sub4px_dense_coverage_pct": 86.2,
+      "sub8px_dense_coverage_pct": 91.8,
+      "refinement_latency_ms": 0.41,
+      "fps_rtx5070": 36.6,
+      "vram_mb": 448.0
+    },
+    {
+      "budget_strategy": "Static K=64",
+      "avg_k_evaluated": 64.0,
+      "sub4px_dense_coverage_pct": 96.1,
+      "sub8px_dense_coverage_pct": 98.5,
+      "refinement_latency_ms": 0.82,
+      "fps_rtx5070": 35.8,
+      "vram_mb": 520.0
+    },
+    {
+      "budget_strategy": "Dynamic Scene-Adaptive K in [8, 64] (E68 Proposed)",
+      "avg_k_evaluated": 18.4,
+      "sub4px_dense_coverage_pct": 96.4,
+      "sub8px_dense_coverage_pct": 98.6,
+      "refinement_latency_ms": 0.26,
+      "fps_rtx5070": 36.85,
+      "vram_mb": 432.0
+    }
+  ],
+  "causal_gap_analysis": {
+    "sub4px_global_exclusion_k32_pct": 10.8,
+    "sub4px_dense_exclusion_k32_pct": 13.8,
+    "sub8px_dense_exclusion_k32_pct": 8.2,
+    "gating_threshold_pct": 10.0,
+    "exceeds_gating_threshold": true,
+    "sparse_overprovisioning_ratio": 3.81,
+    "trigger_ticket_e68": true,
+    "decision": "TRIGGER Ticket E68 (Dynamic Scene-Adaptive Sparse Refinement Budget: K = f(N_cand, density)) for Champion v5"
+  }
+}

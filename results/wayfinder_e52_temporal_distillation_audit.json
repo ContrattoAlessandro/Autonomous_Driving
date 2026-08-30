@@ -5,7 +5,7 @@
   "standard": "Unified Evaluation Contract (E29/E37 Standard)",
   "hardware_benchmark": {
     "platform": "NVIDIA RTX 5070 (Single-Stream FP16 Batch 1)",
-    "teacher_offline_latency_ms": 0.3098200002568774,
+    "teacher_offline_latency_ms": 0.42388000001665205,
     "student_runtime_overhead_ms": 0.0,
     "total_inference_latency_ms": 27.32,
     "edge_fps": 36.603221083455345
@@ -87,7 +87,7 @@
       "distractor_rejection_rate": 96.0,
       "inference_latency_fp16_ms": 27.32,
       "single_stream_edge_fps": 36.603221083455345,
-      "training_teacher_latency_ms": 0.3098200002568774
+      "training_teacher_latency_ms": 0.42388000001665205
     },
     {
       "condition_id": "variant_b_temporal_state_only",
@@ -126,7 +126,7 @@
       "distractor_rejection_rate": 96.1,
       "inference_latency_fp16_ms": 27.32,
       "single_stream_edge_fps": 36.603221083455345,
-      "training_teacher_latency_ms": 0.3098200002568774
+      "training_teacher_latency_ms": 0.42388000001665205
     },
     {
       "condition_id": "variant_c_locked_e52",
@@ -165,7 +165,7 @@
       "distractor_rejection_rate": 96.3,
       "inference_latency_fp16_ms": 27.32,
       "single_stream_edge_fps": 36.603221083455345,
-      "training_teacher_latency_ms": 0.3098200002568774
+      "training_teacher_latency_ms": 0.42388000001665205
     }
   ],
   "hyperparameter_sweeps": {

@@ -1,0 +1,55 @@
+{
+  "sub4px_triangulation_decomposition": {
+    "total_sub4px_errors": 432,
+    "knowledge_transfer_failures_e59": 278,
+    "ktf_share_pct": 64.35,
+    "recovered_instances_e72": 225,
+    "ktf_recovery_rate_pct": 80.94,
+    "residual_sub4px_errors": 207,
+    "error_reduction_pct": 52.08
+  },
+  "scale_stratified_state_accuracy": {
+    "sub_4px": {
+      "v4_baseline_acc": 76.9,
+      "v5a_pre_e72_acc": 82.45,
+      "v5a_with_e72_acc": 89.6,
+      "delta_pp": 7.15,
+      "macro_f1": 88.4
+    },
+    "4_to_8px": {
+      "v4_baseline_acc": 92.1,
+      "v5a_pre_e72_acc": 94.8,
+      "v5a_with_e72_acc": 97.35,
+      "delta_pp": 2.55,
+      "macro_f1": 96.8
+    },
+    "8_to_16px": {
+      "v4_baseline_acc": 97.4,
+      "v5a_pre_e72_acc": 98.1,
+      "v5a_with_e72_acc": 98.9,
+      "delta_pp": 0.8,
+      "macro_f1": 98.65
+    },
+    "macro_gt16px": {
+      "v4_baseline_acc": 98.8,
+      "v5a_pre_e72_acc": 99.1,
+      "v5a_with_e72_acc": 99.4,
+      "delta_pp": 0.3,
+      "macro_f1": 99.25
+    }
+  },
+  "overall_state_metrics": {
+    "global_state_accuracy_pct": 97.85,
+    "global_state_macro_f1_pct": 97.2,
+    "yellow_state_f1_pct": 91.45,
+    "off_state_f1_pct": 94.1,
+    "red_state_recall_pct": 98.15,
+    "empirical_ceiling_e64_macro_f1_pct": 98.95,
+    "headroom_closed_pct": 38.6
+  },
+  "training_latency_and_inference_impact": {
+    "inference_overhead_ms": 0.0,
+    "training_step_overhead_ms": 1.45,
+    "vram_training_gb": 9.15
+  }
+}

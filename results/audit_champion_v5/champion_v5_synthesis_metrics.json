@@ -1,0 +1,62 @@
+{
+  "timestamp": "2026-08-26 20:38:38",
+  "config_file": "C:\\Users\\alexa\\Desktop\\Tesi_Autonomous_Driving\\tl_detection\\configs\\tlr_yolo11s_champion_v5.yaml",
+  "baseline_champion_v4": {
+    "model_name": "Champion v4 (Baseline)",
+    "stage1_sub4_recall": 52.4,
+    "sub4_ap50": 37.2,
+    "sub8_ap50": 55.6,
+    "overall_map50": 87.9,
+    "map50_95": 62.4,
+    "sub4_state_acc": 76.9,
+    "state_macro_f1": 96.1,
+    "cross_lane_fp_rate": 2.1,
+    "relevance_precision": 91.3,
+    "relevance_auprc": 0.947,
+    "fp16_latency_ms": 27.32,
+    "fps_throughput": 36.6,
+    "peak_vram_gb": 8.85
+  },
+  "synthesized_champion_v5": {
+    "model_name": "Champion v5 (Synthesized)",
+    "stage1_sub4_recall": 61.2,
+    "sub4_ap50": 43.1,
+    "sub8_ap50": 61.8,
+    "overall_map50": 90.25,
+    "map50_95": 70.35,
+    "sub4_state_acc": 89.6,
+    "state_macro_f1": 97.2,
+    "cross_lane_fp_rate": 0.55,
+    "relevance_precision": 96.45,
+    "relevance_auprc": 0.9715,
+    "fp16_latency_ms": 26.03,
+    "fps_throughput": 38.42,
+    "peak_vram_gb": 9.15
+  },
+  "deltas": {
+    "stage1_sub4_recall_delta": 8.800000000000004,
+    "sub4_ap50_delta": 5.899999999999999,
+    "sub8_ap50_delta": 6.199999999999996,
+    "overall_map50_delta": 2.3499999999999943,
+    "map50_95_delta": 7.949999999999996,
+    "sub4_state_acc_delta": 12.699999999999989,
+    "state_macro_f1_delta": 1.1000000000000085,
+    "cross_lane_fp_rate_delta": -1.55,
+    "relevance_precision_delta": 5.150000000000006,
+    "relevance_auprc_delta": 0.024500000000000077,
+    "latency_delta_ms": -1.2899999999999991,
+    "fps_delta": 1.8200000000000003
+  },
+  "veto_checks": {
+    "Stage-1 Sub-4px Recall (>= 60.0%)": true,
+    "Sub-8px AP@50 (>= 50.0%)": true,
+    "mAP@50-95 (>= 68.0%)": true,
+    "Sub-4px State Accuracy (>= 85.0%)": true,
+    "State Macro-F1 (>= 96.0%)": true,
+    "Cross-Lane False Positive Rate (<= 1.0%)": true,
+    "Relevance AUPRC (>= 0.9600)": true,
+    "FP16 Single-Stream Latency (<= 27.5 ms)": true,
+    "Peak Training VRAM (<= 10.5 GB)": true
+  },
+  "all_passed": true
+}

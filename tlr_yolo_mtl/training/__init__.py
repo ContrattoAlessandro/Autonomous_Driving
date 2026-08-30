@@ -13,6 +13,8 @@ from .distillation import (
     LocalViewCropExtractor,
     LocalViewDistillationLoss,
     LocalViewTeacherTower,
+    MultiTeacherDistillationConfig,
+    MultiTeacherRelationDistillationLoss,
     StudentKDProjector,
 )
 from .losses import MultiTaskLossWeights, TLRMultiTaskCriterion
@@ -57,6 +59,8 @@ __all__ = [
     "LocalViewTeacherTower",
     "StudentKDProjector",
     "LocalViewDistillationLoss",
+    "MultiTeacherDistillationConfig",
+    "MultiTeacherRelationDistillationLoss",
     "SparseRefinementLoss",
     "RefinementLossWeights",
     "TemporalAttentionFusion",

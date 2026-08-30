@@ -101,7 +101,7 @@ except ImportError:
 
 @dataclass(frozen=True, slots=True)
 class SparseRefinementConfig:
-    """Configuration for Sparse Candidate Refinement."""
+    """Configuration for Sparse Candidate Refinement (Tickets E49, E68 & E69)."""
     channels_p2: int = 64
     channels_c2: int = 64
     hidden_dim: int = 64
@@ -113,12 +113,42 @@ class SparseRefinementConfig:
     enable_box_refine: bool = True
     enable_state_refine: bool = True
     enable_quality_refine: bool = True
+    # Ticket E68 Dynamic Budgeting
+    dynamic_budget: bool = True
+    budget_tiers: tuple[int, ...] = (8, 16, 32, 48, 64)
+    min_budget: int = 8
+    max_budget: int = 64
+    # Ticket E69 Distributional Refinement
+    distributional: bool = True
+    reg_max: int = 16
+    delta_range: tuple[float, float] = (-1.5, 1.5)
+
+
+def select_dynamic_refinement_budget(
+    active_count: int | torch.Tensor,
+    tiers: tuple[int, ...] = (8, 16, 32, 48, 64),
+    min_k: int = 8,
+    max_k: int = 64,
+) -> int:
+    """Select smallest budget tier >= active candidate count (Ticket E68)."""
+    if isinstance(active_count, torch.Tensor):
+        n = int(active_count.max().item()) if active_count.numel() > 0 else min_k
+    else:
+        n = int(active_count)
+    
+    for t in sorted(tiers):
+        if t >= n:
+            return max(min_k, min(t, max_k))
+    return max_k
 
 
 class SparseCandidateRefinementHead(nn.Module):
-    """Virtual P1 sub-grid candidate refinement head for tiny objects.
+    """Virtual P1 sub-grid candidate refinement head for tiny objects (Tickets E49, E68 & E69).
     
     Processes only the Top-K candidate proposals with area < area_threshold.
+    Supports:
+    - Dynamic scene-adaptive candidate budget K in {8, 16, 32, 48, 64} (Ticket E68).
+    - Continuous Gaussian distributional box regression with DFL expectations (Ticket E69).
     """
 
     def __init__(
@@ -133,6 +163,11 @@ class SparseCandidateRefinementHead(nn.Module):
         max_candidates: int = 32,
         stride: float = 4.0,
         state_classes: int = 4,
+        dynamic_budget: bool = True,
+        budget_tiers: tuple[int, ...] = (8, 16, 32, 48, 64),
+        distributional: bool = True,
+        reg_max: int = 16,
+        delta_range: tuple[float, float] = (-1.5, 1.5),
     ) -> None:
         super().__init__()
         if config is not None:
@@ -147,6 +182,11 @@ class SparseCandidateRefinementHead(nn.Module):
                 max_candidates=max_candidates,
                 stride=stride,
                 state_classes=state_classes,
+                dynamic_budget=dynamic_budget,
+                budget_tiers=budget_tiers,
+                distributional=distributional,
+                reg_max=reg_max,
+                delta_range=delta_range,
             )
 
         in_channels = self.config.channels_p2 + self.config.channels_c2
@@ -171,10 +211,23 @@ class SparseCandidateRefinementHead(nn.Module):
             nn.SiLU(inplace=True),
         )
 
-        # Box sub-pixel delta regressor: (Δx, Δy, Δw, Δh)
-        self.box_delta_head = nn.Linear(self.config.hidden_dim, 4)
-        nn.init.zeros_(self.box_delta_head.weight)
-        nn.init.zeros_(self.box_delta_head.bias)
+        # Box regression head: either continuous distributional (E69) or deterministic (E49)
+        self.reg_max = int(self.config.reg_max)
+        if self.config.distributional:
+            self.box_dist_head = nn.Linear(self.config.hidden_dim, 4 * self.reg_max)
+            nn.init.zeros_(self.box_dist_head.weight)
+            nn.init.zeros_(self.box_dist_head.bias)
+            bin_vals = torch.linspace(
+                self.config.delta_range[0], self.config.delta_range[1], self.reg_max
+            )
+            self.register_buffer("bin_values", bin_vals)
+            self.box_delta_head = None
+        else:
+            self.box_delta_head = nn.Linear(self.config.hidden_dim, 4)
+            nn.init.zeros_(self.box_delta_head.weight)
+            nn.init.zeros_(self.box_delta_head.bias)
+            self.box_dist_head = None
+            self.register_buffer("bin_values", None)
 
         # State logit residual head: Δq_state
         self.state_delta_head = nn.Linear(self.config.hidden_dim, self.config.state_classes)
@@ -203,7 +256,7 @@ class SparseCandidateRefinementHead(nn.Module):
         if candidate_boxes_xyxy is None:
             raise ValueError("candidate_boxes_xyxy must be provided")
 
-        B, K, _ = candidate_boxes_xyxy.shape
+        B, K_orig, _ = candidate_boxes_xyxy.shape
         boxes = candidate_boxes_xyxy
 
         # Scale normalized boxes if specified
@@ -222,9 +275,26 @@ class SparseCandidateRefinementHead(nn.Module):
         # Active mask: tiny traffic light candidates (area < threshold)
         refine_mask = (areas > 0.0) & (areas < self.area_threshold)
 
-        # Flatten boxes for ROIAlign batch indexing: [B*K, 5]
-        batch_ids = torch.arange(B, device=boxes.device, dtype=boxes.dtype).unsqueeze(1).repeat(1, K).reshape(-1, 1)
-        rois = torch.cat([batch_ids, boxes_px.reshape(-1, 4)], dim=1)
+        # E68 Dynamic Budgeting: slice to dynamic K if enabled
+        if self.config.dynamic_budget and K_orig > self.config.min_budget:
+            active_per_img = refine_mask.sum(dim=1)  # [B]
+            k_dyn = select_dynamic_refinement_budget(
+                active_per_img,
+                tiers=self.config.budget_tiers,
+                min_k=self.config.min_budget,
+                max_k=min(K_orig, self.config.max_budget),
+            )
+            k_active = min(k_dyn, K_orig)
+            boxes_px_active = boxes_px[:, :k_active]
+            refine_mask_active = refine_mask[:, :k_active]
+        else:
+            k_active = K_orig
+            boxes_px_active = boxes_px
+            refine_mask_active = refine_mask
+
+        # Flatten boxes for ROIAlign batch indexing: [B*k_active, 5]
+        batch_ids = torch.arange(B, device=boxes.device, dtype=boxes.dtype).unsqueeze(1).repeat(1, k_active).reshape(-1, 1)
+        rois = torch.cat([batch_ids, boxes_px_active.reshape(-1, 4)], dim=1)
 
         # Direct, vectorized ROIAlign extraction without whole-map concatenation
         roi_p2 = roi_align(
@@ -233,22 +303,54 @@ class SparseCandidateRefinementHead(nn.Module):
         roi_c2 = roi_align(
             c2_feat, rois, output_size=self.roi_size, spatial_scale=self.spatial_scale, aligned=True
         )
-        fused_rois = torch.cat([roi_p2, roi_c2], dim=1)  # [B*K, C_p2 + C_c2, 7, 7]
+        fused_rois = torch.cat([roi_p2, roi_c2], dim=1)  # [B*k_active, C_p2 + C_c2, 7, 7]
 
         # Convolutional refinement feature extraction
         conv_out = self.refinement_conv(fused_rois)
-        features = self.fc(self.pool(conv_out).flatten(1))  # [B*K, hidden_dim]
+        features = self.fc(self.pool(conv_out).flatten(1))  # [B*k_active, hidden_dim]
 
-        # Predict deltas
-        raw_box_deltas = self.box_delta_head(features).reshape(B, K, 4)
-        raw_state_res = self.state_delta_head(features).reshape(B, K, self.config.state_classes)
-        raw_qual_deltas = self.quality_delta_head(features).reshape(B, K, 1)
+        # Predict box deltas (Distributional vs Deterministic)
+        if self.config.distributional:
+            raw_box_dist = self.box_dist_head(features).reshape(B, k_active, 4, self.reg_max)
+            prob_dist = F.softmax(raw_box_dist, dim=-1)
+            # Expectation over discrete bin values: [B, k_active, 4]
+            raw_box_deltas = torch.sum(prob_dist * self.bin_values, dim=-1)
+            # Predictive spatial uncertainty (variance): [B, k_active, 4]
+            raw_uncertainty = torch.sum(
+                prob_dist * (self.bin_values - raw_box_deltas.unsqueeze(-1)).square(), dim=-1
+            )
+        else:
+            raw_box_deltas = self.box_delta_head(features).reshape(B, k_active, 4)
+            raw_box_dist = None
+            raw_uncertainty = None
+
+        raw_state_res = self.state_delta_head(features).reshape(B, k_active, self.config.state_classes)
+        raw_qual_deltas = self.quality_delta_head(features).reshape(B, k_active, 1)
 
         # Mask inactive (macro) candidate updates to zero
-        mask_4d = refine_mask.unsqueeze(-1)
-        box_deltas = torch.where(mask_4d, raw_box_deltas, torch.zeros_like(raw_box_deltas))
-        state_residuals = torch.where(mask_4d, raw_state_res, torch.zeros_like(raw_state_res))
-        quality_deltas = torch.where(mask_4d, raw_qual_deltas, torch.zeros_like(raw_qual_deltas))
+        mask_4d = refine_mask_active.unsqueeze(-1)
+        box_deltas_act = torch.where(mask_4d, raw_box_deltas, torch.zeros_like(raw_box_deltas))
+        state_res_act = torch.where(mask_4d, raw_state_res, torch.zeros_like(raw_state_res))
+        quality_deltas_act = torch.where(mask_4d, raw_qual_deltas, torch.zeros_like(raw_qual_deltas))
+
+        # Pad back to K_orig if dynamically sliced
+        if k_active < K_orig:
+            pad_k = K_orig - k_active
+            box_deltas = F.pad(box_deltas_act, (0, 0, 0, pad_k), value=0.0)
+            state_residuals = F.pad(state_res_act, (0, 0, 0, pad_k), value=0.0)
+            quality_deltas = F.pad(quality_deltas_act, (0, 0, 0, pad_k), value=0.0)
+            if raw_box_dist is not None:
+                box_dist = F.pad(raw_box_dist, (0, 0, 0, 0, 0, pad_k), value=0.0)
+                box_uncertainty = F.pad(raw_uncertainty, (0, 0, 0, pad_k), value=0.0)
+            else:
+                box_dist = None
+                box_uncertainty = None
+        else:
+            box_deltas = box_deltas_act
+            state_residuals = state_res_act
+            quality_deltas = quality_deltas_act
+            box_dist = raw_box_dist
+            box_uncertainty = raw_uncertainty
 
         # Apply box sub-pixel refinement
         if self.config.enable_box_refine:
@@ -283,7 +385,7 @@ class SparseCandidateRefinementHead(nn.Module):
         if img_shape is not None and is_normalized:
             refined_boxes = refined_boxes / scale
 
-        return {
+        res = {
             "refined_boxes_xyxy": refined_boxes,
             "refined_state_logits": refined_state,
             "box_deltas": box_deltas,
@@ -291,3 +393,7 @@ class SparseCandidateRefinementHead(nn.Module):
             "quality_deltas": quality_deltas,
             "refine_mask": refine_mask,
         }
+        if box_dist is not None:
+            res["box_distribution"] = box_dist
+            res["box_uncertainty"] = box_uncertainty
+        return res

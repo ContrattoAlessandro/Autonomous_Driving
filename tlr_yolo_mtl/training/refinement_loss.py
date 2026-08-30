@@ -31,10 +31,12 @@ class RefinementLossWeights:
     state_refine: float = 0.5
     quality_refine: float = 0.25
     nwd_constant: float = 12.0
+    dfl_weight: float = 0.3
+    delta_range: tuple[float, float] = (-1.5, 1.5)
 
 
 class SparseRefinementLoss(nn.Module):
-    """Loss module for Sparse Candidate Refinement Head."""
+    """Loss module for Sparse Candidate Refinement Head (Tickets E49, E68 & E69)."""
 
     def __init__(
         self,
@@ -44,6 +46,8 @@ class SparseRefinementLoss(nn.Module):
         state_refine_weight: float = 0.5,
         quality_refine_weight: float = 0.25,
         nwd_constant: float = 12.0,
+        dfl_weight: float = 0.3,
+        delta_range: tuple[float, float] = (-1.5, 1.5),
         focal_gamma: float = 1.5,
     ) -> None:
         super().__init__()
@@ -52,6 +56,8 @@ class SparseRefinementLoss(nn.Module):
             state_refine=state_refine_weight,
             quality_refine=quality_refine_weight,
             nwd_constant=nwd_constant,
+            dfl_weight=dfl_weight,
+            delta_range=delta_range,
         )
         self.focal_gamma = float(focal_gamma)
 
@@ -74,6 +80,39 @@ class SparseRefinementLoss(nn.Module):
         nwd = torch.exp(-torch.sqrt(w2) / self.weights.nwd_constant)
         return (1.0 - nwd).mean()
 
+    def _compute_dfl_loss(
+        self,
+        pred_dist: torch.Tensor,  # [N, 4, reg_max]
+        target_deltas: torch.Tensor,  # [N, 4]
+        reg_max: int = 16,
+    ) -> torch.Tensor:
+        """Computes Distribution Focal Loss (DFL) on continuous target deltas (Ticket E69)."""
+        if pred_dist.numel() == 0:
+            return pred_dist.new_zeros(1).sum()
+
+        min_val, max_val = self.weights.delta_range
+        # Map target deltas to bin index space [0, reg_max - 1]
+        target_clamped = target_deltas.clamp(min_val, max_val)
+        target_norm = (target_clamped - min_val) / (max_val - min_val) * (reg_max - 1)
+        target_norm = target_norm.clamp(0.0, float(reg_max - 1 - 1e-4))
+
+        tl = target_norm.long()  # [N, 4]
+        tr = tl + 1
+        wl = tr.float() - target_norm  # [N, 4]
+        wr = 1.0 - wl  # [N, 4]
+
+        # Reshape to [N*4, reg_max] for standard CrossEntropy
+        pred_dist_flat = pred_dist.reshape(-1, reg_max)
+        tl_flat = tl.reshape(-1)
+        tr_flat = tr.reshape(-1)
+        wl_flat = wl.reshape(-1)
+        wr_flat = wr.reshape(-1)
+
+        loss_l = F.cross_entropy(pred_dist_flat, tl_flat, reduction="none") * wl_flat
+        loss_r = F.cross_entropy(pred_dist_flat, tr_flat, reduction="none") * wr_flat
+
+        return (loss_l + loss_r).mean()
+
     def _compute_focal_state_loss(
         self, pred_logits: torch.Tensor, target_labels: torch.Tensor
     ) -> torch.Tensor:
@@ -92,6 +131,7 @@ class SparseRefinementLoss(nn.Module):
         gt_boxes_xyxy: torch.Tensor,
         gt_state_labels: torch.Tensor,
         matched_gt_indices: torch.Tensor,  # [B, K] (-1 for unmatched)
+        coarse_boxes_xyxy: torch.Tensor | None = None,
     ) -> dict[str, torch.Tensor]:
         """Calculates multi-task refinement loss on matched positive candidate proposals.
 
@@ -100,6 +140,7 @@ class SparseRefinementLoss(nn.Module):
             gt_boxes_xyxy: Ground truth bounding boxes [B, M, 4]
             gt_state_labels: Ground truth state classes [B, M] (0..3)
             matched_gt_indices: Index of assigned GT box for each candidate [B, K]
+            coarse_boxes_xyxy: Optional pre-refinement coarse boxes [B, K, 4]
 
         Returns:
             Dictionary containing loss components and total refinement loss.
@@ -114,6 +155,7 @@ class SparseRefinementLoss(nn.Module):
                 "loss_refine_box": zero,
                 "loss_refine_state": zero,
                 "loss_refine_quality": zero,
+                "loss_refine_dfl": zero,
             }
 
         b_idx, k_idx = torch.nonzero(valid_matches, as_tuple=True)
@@ -125,10 +167,41 @@ class SparseRefinementLoss(nn.Module):
         refined_states = refinement_outputs["refined_state_logits"][b_idx, k_idx]
         target_states = gt_state_labels[b_idx, m_idx]
 
-        # 1. Box Refinement Loss (NWD + Smooth L1 center offset)
+        # 1. Box Refinement Loss (NWD + Smooth L1 center offset + DFL)
         l_nwd = self._compute_nwd_loss(refined_boxes, target_boxes)
         l_l1 = F.smooth_l1_loss(refined_boxes, target_boxes, beta=1.0)
-        l_box = 0.7 * l_nwd + 0.3 * l_l1
+
+        # Compute DFL if distributional head is active
+        if "box_distribution" in refinement_outputs and refinement_outputs["box_distribution"] is not None:
+            pred_dist = refinement_outputs["box_distribution"][b_idx, k_idx]
+            reg_max = pred_dist.shape[-1]
+
+            if coarse_boxes_xyxy is not None:
+                c_boxes = coarse_boxes_xyxy[b_idx, k_idx]
+            else:
+                c_boxes = refined_boxes.detach()
+
+            cx_c = (c_boxes[:, 0] + c_boxes[:, 2]) * 0.5
+            cy_c = (c_boxes[:, 1] + c_boxes[:, 3]) * 0.5
+            bw_c = (c_boxes[:, 2] - c_boxes[:, 0]).clamp_min(1e-4)
+            bh_c = (c_boxes[:, 3] - c_boxes[:, 1]).clamp_min(1e-4)
+
+            cx_gt = (target_boxes[:, 0] + target_boxes[:, 2]) * 0.5
+            cy_gt = (target_boxes[:, 1] + target_boxes[:, 3]) * 0.5
+            bw_gt = (target_boxes[:, 2] - target_boxes[:, 0]).clamp_min(1e-4)
+            bh_gt = (target_boxes[:, 3] - target_boxes[:, 1]).clamp_min(1e-4)
+
+            dx_gt = (cx_gt - cx_c) / bw_c
+            dy_gt = (cy_gt - cy_c) / bh_c
+            dw_gt = torch.log(bw_gt / bw_c).clamp(-1.5, 1.5)
+            dh_gt = torch.log(bh_gt / bh_c).clamp(-1.5, 1.5)
+            target_deltas = torch.stack([dx_gt, dy_gt, dw_gt, dh_gt], dim=-1)
+
+            l_dfl = self._compute_dfl_loss(pred_dist, target_deltas, reg_max=reg_max)
+            l_box = 0.5 * l_nwd + 0.3 * l_dfl + 0.2 * l_l1
+        else:
+            l_dfl = refined_boxes.new_zeros(1).sum()
+            l_box = 0.7 * l_nwd + 0.3 * l_l1
 
         # 2. State Residual Loss (Focal Cross-Entropy)
         l_state = self._compute_focal_state_loss(refined_states, target_states)
@@ -157,4 +230,5 @@ class SparseRefinementLoss(nn.Module):
             "loss_refine_box": l_box,
             "loss_refine_state": l_state,
             "loss_refine_quality": l_qual,
+            "loss_refine_dfl": l_dfl,
         }

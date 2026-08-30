@@ -1,172 +1,107 @@
-"""Local-View Tiny-TL High-Resolution Crop Distillation Module (Ticket E48).
+"""Local-View Tiny-TL High-Resolution Crop Distillation (Ticket E48)
+& Tiny-State Multi-Teacher Relation Distillation (Ticket E72).
 
-Implements training-time knowledge distillation from a high-resolution Local-View Teacher
-(operating on zoomed 64x64 px crops of sub-16px traffic lights) into the Student's
-full-frame P2/P3 ROIAlign representation.
-
-Core Innovations:
-1. Dynamic Batch Crop Extractor: Bilinear extraction of sub-16px traffic lights with
-   margin padding and standardizing to 64x64 px patches.
-2. Lightweight Local-View Teacher Tower: High-frequency convolutional encoder (64x64 -> 128D)
-   and 4-class state logit predictor.
-3. Student-to-Teacher Distillation Projector: Aligns student ROIAlign feature space
-   with the teacher's high-resolution visual embedding manifold.
-4. Composite Distillation Loss: Combines L2/Cosine feature alignment with temperature-scaled
-   soft-label KL divergence.
-5. Zero Runtime Overhead: Active strictly during training backpropagation (delta_t = 0.00 ms).
+Scientific Motivation:
+1. Ticket E48: Standard full-frame representations of sub-8px objects suffer from
+   severe pixel-striding and spatial pooling loss. LocalViewTeacher operates directly
+   on 64x64 px patches to provide sharp feature and chromatic supervision.
+2. Ticket E72: Multi-Model Triangulation in Ticket E59 demonstrated that 64.35% of
+   sub-4px state errors originate from Knowledge Transfer / Distillation Capacity Failure
+   (where both Local-View and Temporal Teachers are correct). Ticket E72 resolves this
+   via consensus-weighted multi-teacher distillation and relational Gram matrix alignment.
 """
 
 from __future__ import annotations
 
 import math
-from typing import Any, Mapping, NamedTuple, Sequence, Tuple
+from dataclasses import dataclass
+from typing import Any, Mapping, Optional, Sequence, Tuple
 
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
+from torch import nn
+from torch.nn import functional as F
 
 
-class LocalViewCrops(NamedTuple):
-    """Container for dynamically extracted high-resolution crops."""
-    crops: torch.Tensor             # [M, 3, crop_h, crop_w]
-    box_indices: torch.Tensor       # [M] index into original positive box list
-    batch_indices: torch.Tensor     # [M] batch indices [0, B-1]
-    gt_boxes: torch.Tensor          # [M, 4] original bounding boxes (pixels)
-    gt_states: torch.Tensor         # [M] ground-truth state labels
-
-
-class LocalViewCropExtractor(nn.Module):
-    """Dynamic batch cropper extracting high-resolution patches around tiny traffic lights.
-    
-    For all ground-truth traffic lights with area < max_area_threshold (default: 256 px^2,
-    i.e. <16x16 px), extracts bounding box crops with contextual margin and bilinearly
-    resamples them to standard (crop_h, crop_w) resolution.
-    """
+class LocalViewCropExtractor:
+    """Extracts and resizes high-resolution crops around small traffic light annotations."""
 
     def __init__(
         self,
-        crop_size: tuple[int, int] = (64, 64),
-        margin: float = 0.15,
+        crop_size: int | tuple[int, int] | list[int] = 64,
+        padding_ratio: float = 0.5,
+        margin: float | None = None,
+        min_crop_side: int = 16,
+        max_crops_per_image: int = 32,
         max_area_threshold: float = 256.0,
-        min_dim: float = 1.0,
+        **kwargs: Any,
     ) -> None:
-        super().__init__()
-        self.crop_h, self.crop_w = crop_size
-        self.margin = float(margin)
+        if isinstance(crop_size, (tuple, list)):
+            self.crop_size = int(crop_size[0])
+        else:
+            self.crop_size = int(crop_size)
+        self.padding_ratio = float(margin) if margin is not None else float(padding_ratio)
+        self.min_crop_side = int(min_crop_side)
+        self.max_crops_per_image = int(max_crops_per_image)
         self.max_area_threshold = float(max_area_threshold)
-        self.min_dim = float(min_dim)
 
-    @torch.no_grad()
-    def forward(
+    def extract_crops(
         self,
-        images: torch.Tensor,
-        boxes: torch.Tensor,
-        batch_idx: torch.Tensor,
-        states: torch.Tensor | None = None,
-        is_normalized: bool = False,
-    ) -> LocalViewCrops:
-        """Extract and resize crops for eligible tiny traffic lights.
-
-        Args:
-            images: Batch images [B, 3, H, W] in [0, 1] or [0, 255].
-            boxes: Target bounding boxes [N, 4] (x1, y1, x2, y2).
-            batch_idx: Batch assignment indices [N] in [0, B - 1].
-            states: Optional ground truth state labels [N].
-            is_normalized: Whether box coordinates are in [0, 1] relative to (H, W).
+        images: torch.Tensor,       # [B, 3, H, W]
+        boxes_xyxy: torch.Tensor,    # [N, 5] (batch_idx, x1, y1, x2, y2) in pixel coords
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Extracts squared, padded patches around target bounding boxes.
 
         Returns:
-            LocalViewCrops container.
+            crops: [M, 3, crop_size, crop_size] normalized patches
+            valid_indices: [M] index of extracted boxes within input boxes_xyxy
         """
+        if boxes_xyxy.numel() == 0 or images.numel() == 0:
+            return torch.empty((0, 3, self.crop_size, self.crop_size), device=images.device, dtype=images.dtype), torch.empty((0,), dtype=torch.long, device=images.device)
+
         B, C, H, W = images.shape
-        device = images.device
+        crops_list = []
+        valid_idx_list = []
 
-        if boxes.numel() == 0 or batch_idx.numel() == 0:
-            return LocalViewCrops(
-                crops=torch.empty((0, C, self.crop_h, self.crop_w), device=device, dtype=images.dtype),
-                box_indices=torch.empty((0,), device=device, dtype=torch.long),
-                batch_indices=torch.empty((0,), device=device, dtype=torch.long),
-                gt_boxes=torch.empty((0, 4), device=device, dtype=images.dtype),
-                gt_states=torch.empty((0,), device=device, dtype=torch.long),
+        for idx in range(min(boxes_xyxy.shape[0], self.max_crops_per_image * B)):
+            b_idx = int(boxes_xyxy[idx, 0].item())
+            if b_idx < 0 or b_idx >= B:
+                continue
+
+            x1, y1, x2, y2 = boxes_xyxy[idx, 1:].tolist()
+            w = max(x2 - x1, 1.0)
+            h = max(y2 - y1, 1.0)
+
+            # Center and expand with padding
+            cx = (x1 + x2) * 0.5
+            cy = (y1 + y2) * 0.5
+            side = max(w, h) * (1.0 + self.padding_ratio * 2.0)
+            side = max(side, float(self.min_crop_side))
+
+            crop_x1 = max(0, int(cx - side * 0.5))
+            crop_y1 = max(0, int(cy - side * 0.5))
+            crop_x2 = min(W, int(cx + side * 0.5))
+            crop_y2 = min(H, int(cy + side * 0.5))
+
+            if crop_x2 <= crop_x1 or crop_y2 <= crop_y1:
+                continue
+
+            patch = images[b_idx : b_idx + 1, :, crop_y1:crop_y2, crop_x1:crop_x2]
+            patch_resized = F.interpolate(
+                patch, size=(self.crop_size, self.crop_size), mode="bilinear", align_corners=False
             )
+            crops_list.append(patch_resized.squeeze(0))
+            valid_idx_list.append(idx)
 
-        boxes_px = boxes.clone()
-        if is_normalized:
-            scale_vec = torch.tensor([W, H, W, H], device=device, dtype=boxes.dtype)
-            boxes_px = boxes_px * scale_vec
+        if not crops_list:
+            return torch.empty((0, 3, self.crop_size, self.crop_size), device=images.device, dtype=images.dtype), torch.empty((0,), dtype=torch.long, device=images.device)
 
-        # Calculate bounding box areas in pixels
-        w = (boxes_px[:, 2] - boxes_px[:, 0]).clamp_min(self.min_dim)
-        h = (boxes_px[:, 3] - boxes_px[:, 1]).clamp_min(self.min_dim)
-        areas = w * h
-
-        # Filter boxes that are strictly tiny (area < max_area_threshold)
-        valid_mask = (areas > 0) & (areas <= self.max_area_threshold)
-        valid_indices = torch.where(valid_mask)[0]
-
-        if valid_indices.numel() == 0:
-            return LocalViewCrops(
-                crops=torch.empty((0, C, self.crop_h, self.crop_w), device=device, dtype=images.dtype),
-                box_indices=torch.empty((0,), device=device, dtype=torch.long),
-                batch_indices=torch.empty((0,), device=device, dtype=torch.long),
-                gt_boxes=torch.empty((0, 4), device=device, dtype=images.dtype),
-                gt_states=torch.empty((0,), device=device, dtype=torch.long),
-            )
-
-        sel_boxes = boxes_px[valid_indices]
-        sel_b_idx = batch_idx[valid_indices].long()
-        sel_states = states[valid_indices].long() if states is not None else torch.zeros_like(valid_indices)
-
-        # Apply contextual margin around physical box
-        cx = (sel_boxes[:, 0] + sel_boxes[:, 2]) * 0.5
-        cy = (sel_boxes[:, 1] + sel_boxes[:, 3]) * 0.5
-        sel_w = (sel_boxes[:, 2] - sel_boxes[:, 0]).clamp_min(self.min_dim)
-        sel_h = (sel_boxes[:, 3] - sel_boxes[:, 1]).clamp_min(self.min_dim)
-
-        exp_w = sel_w * (1.0 + 2.0 * self.margin)
-        exp_h = sel_h * (1.0 + 2.0 * self.margin)
-
-        exp_x1 = (cx - exp_w * 0.5).clamp(min=0.0, max=float(W - 1))
-        exp_y1 = (cy - exp_h * 0.5).clamp(min=0.0, max=float(H - 1))
-        exp_x2 = (cx + exp_w * 0.5).clamp(min=0.0, max=float(W - 1))
-        exp_y2 = (cy + exp_h * 0.5).clamp(min=0.0, max=float(H - 1))
-
-        # Dynamic patch extraction via grid_sample
-        M = valid_indices.shape[0]
-        crops = torch.empty((M, C, self.crop_h, self.crop_w), device=device, dtype=images.dtype)
-
-        # Construct normalized sampling grids
-        norm_x1 = (exp_x1 / max(W - 1, 1)) * 2.0 - 1.0
-        norm_y1 = (exp_y1 / max(H - 1, 1)) * 2.0 - 1.0
-        norm_x2 = (exp_x2 / max(W - 1, 1)) * 2.0 - 1.0
-        norm_y2 = (exp_y2 / max(H - 1, 1)) * 2.0 - 1.0
-
-        for i in range(M):
-            b_i = int(sel_b_idx[i].item())
-            gy = torch.linspace(norm_y1[i], norm_y2[i], self.crop_h, device=device, dtype=images.dtype)
-            gx = torch.linspace(norm_x1[i], norm_x2[i], self.crop_w, device=device, dtype=images.dtype)
-            mesh_y, mesh_x = torch.meshgrid(gy, gx, indexing="ij")
-            grid = torch.stack([mesh_x, mesh_y], dim=-1).unsqueeze(0)  # [1, crop_h, crop_w, 2]
-
-            sample = F.grid_sample(
-                images[b_i : b_i + 1],
-                grid,
-                mode="bilinear",
-                padding_mode="border",
-                align_corners=True,
-            )
-            crops[i] = sample.squeeze(0)
-
-        return LocalViewCrops(
-            crops=crops,
-            box_indices=valid_indices,
-            batch_indices=sel_b_idx,
-            gt_boxes=sel_boxes,
-            gt_states=sel_states,
-        )
+        crops_tensor = torch.stack(crops_list, dim=0)
+        valid_indices = torch.tensor(valid_idx_list, dtype=torch.long, device=images.device)
+        return crops_tensor, valid_indices
 
 
 class TeacherResidualBlock(nn.Module):
-    """Residual convolutional block with BatchNorm and SiLU activation."""
+    """Standard 2-conv residual bottleneck for Local-View Teacher."""
 
     def __init__(self, in_channels: int, out_channels: int, stride: int = 1) -> None:
         super().__init__()
@@ -193,7 +128,7 @@ class TeacherResidualBlock(nn.Module):
 
 
 class LocalViewTeacherTower(nn.Module):
-    """Lightweight High-Resolution Local-View Teacher Network.
+    """High-Resolution Crop Teacher Network (Ticket E48).
     
     Processes 64x64 px traffic light crops to extract:
     1. High-resolution feature embedding f_TL^crop in R^embed_dim (default: 128).
@@ -245,7 +180,7 @@ class LocalViewTeacherTower(nn.Module):
             state_logits: [M, num_states] unnormalized classification logits.
         """
         if crops.shape[0] == 0:
-            embed_dim = self.feature_head[-1].out_features
+            embed_dim = self.feature_head[-1].normalized_shape[0] if hasattr(self.feature_head[-1], 'normalized_shape') else 128
             num_states = self.state_head[-1].out_features
             return (
                 torch.empty((0, embed_dim), device=crops.device, dtype=crops.dtype),
@@ -390,6 +325,186 @@ class LocalViewDistillationLoss(nn.Module):
         }
 
         return total_loss, metrics
+
+
+# =============================================================================
+# Ticket E72: Multi-Teacher Relation Distillation
+# =============================================================================
+
+@dataclass(frozen=True, slots=True)
+class MultiTeacherDistillationConfig:
+    """Configuration for Multi-Teacher Relation Distillation (Ticket E72)."""
+    temperature: float = 3.0
+    weight_kd: float = 1.0
+    weight_relation: float = 0.5
+    weight_feature: float = 0.25
+    local_teacher_weight: float = 0.5
+    temporal_teacher_weight: float = 0.5
+    sub4px_scale_boost: float = 2.0
+    area_sub4px_threshold: float = 16.0  # px^2 (side <= 4px)
+    eps: float = 1e-7
+
+
+class MultiTeacherRelationDistillationLoss(nn.Module):
+    """Multi-Teacher Relational and Logit Distillation Loss Module (Ticket E72).
+    
+    Distills rich chromatic, visual, and temporal representations from:
+    - Teacher 1: Local-View High-Resolution Crop Teacher (Ticket E48)
+    - Teacher 2: Temporal Sequence Teacher (Ticket E52)
+    into the Single-Frame Student.
+    """
+
+    def __init__(
+        self,
+        config: MultiTeacherDistillationConfig | None = None,
+        *,
+        student_dim: int = 64,
+        teacher_dim: int = 64,
+        temperature: float = 3.0,
+        weight_kd: float = 1.0,
+        weight_relation: float = 0.5,
+        weight_feature: float = 0.25,
+    ) -> None:
+        super().__init__()
+        self.config = config or MultiTeacherDistillationConfig(
+            temperature=temperature,
+            weight_kd=weight_kd,
+            weight_relation=weight_relation,
+            weight_feature=weight_feature,
+        )
+
+        # Feature adaptation projection if student and teacher feature dims differ
+        if student_dim != teacher_dim:
+            self.feat_proj = nn.Linear(student_dim, teacher_dim, bias=False)
+        else:
+            self.feat_proj = nn.Identity()
+
+    def _compute_consensus_weights(
+        self,
+        local_logits: torch.Tensor,
+        temp_logits: torch.Tensor,
+    ) -> torch.Tensor:
+        """Computes pairwise teacher consensus agreement weight in [0, 1]."""
+        p_local = F.softmax(local_logits, dim=-1)
+        p_temp = F.softmax(temp_logits, dim=-1)
+        
+        # Cosine similarity between teacher probability vectors
+        cos_sim = F.cosine_similarity(p_local, p_temp, dim=-1).clamp(-1.0, 1.0)
+        consensus = 0.5 * (1.0 + cos_sim)  # Map [-1, 1] to [0, 1]
+        return consensus
+
+    def _compute_relational_loss(
+        self,
+        student_feats: torch.Tensor,  # [N, D]
+        teacher_feats: torch.Tensor,  # [N, D]
+    ) -> torch.Tensor:
+        """Computes Relational Similarity Distillation (RSD) loss between Gram matrices."""
+        N = student_feats.shape[0]
+        if N <= 1:
+            return student_feats.new_zeros(1).sum()
+
+        s_norm = F.normalize(student_feats, p=2, dim=-1)
+        t_norm = F.normalize(teacher_feats, p=2, dim=-1)
+
+        # Pairwise candidate relational Gram matrices: [N, N]
+        gram_s = torch.mm(s_norm, s_norm.t())
+        gram_t = torch.mm(t_norm, t_norm.t())
+
+        # Frobenius norm difference
+        rel_loss = F.mse_loss(gram_s, gram_t, reduction="mean")
+        return rel_loss
+
+    def forward(
+        self,
+        student_logits: torch.Tensor,       # [N, num_classes] (e.g. 4 state classes)
+        student_features: torch.Tensor,     # [N, D_student]
+        local_teacher_logits: torch.Tensor, # [N, num_classes]
+        local_teacher_features: torch.Tensor, # [N, D_teacher]
+        temporal_teacher_logits: torch.Tensor, # [N, num_classes]
+        temporal_teacher_features: torch.Tensor, # [N, D_teacher]
+        candidate_areas: torch.Tensor | None = None,  # [N] in px^2
+    ) -> dict[str, torch.Tensor]:
+        """Calculates multi-teacher distillation loss components.
+        
+        Args:
+            student_logits: Predicted state logits from student.
+            student_features: Intermediate feature embeddings from student.
+            local_teacher_logits: Local high-res crop teacher state logits.
+            local_teacher_features: Local crop teacher feature embeddings.
+            temporal_teacher_logits: Multi-frame temporal sequence teacher state logits.
+            temporal_teacher_features: Temporal teacher feature embeddings.
+            candidate_areas: Optional candidate bounding box areas for scale boosting.
+            
+        Returns:
+            Dictionary containing total distillation loss and constituent terms.
+        """
+        N = student_logits.shape[0]
+        if N == 0:
+            zero = student_logits.sum() * 0.0
+            return {
+                "loss_distill_total": zero,
+                "loss_distill_kd": zero,
+                "loss_distill_relation": zero,
+                "loss_distill_feature": zero,
+            }
+
+        T = self.config.temperature
+
+        # 1. Consensus-Weighted Soft Targets
+        consensus_weights = self._compute_consensus_weights(
+            local_teacher_logits, temporal_teacher_logits
+        )  # [N]
+
+        # Combine teacher logits with configured weights
+        fused_teacher_logits = (
+            self.config.local_teacher_weight * local_teacher_logits
+            + self.config.temporal_teacher_weight * temporal_teacher_logits
+        )
+
+        p_s = F.log_softmax(student_logits / T, dim=-1)
+        p_t = F.softmax(fused_teacher_logits / T, dim=-1)
+
+        # Scale-adaptive weighting boost for sub-4px signals
+        if candidate_areas is not None:
+            is_sub4px = candidate_areas <= self.config.area_sub4px_threshold
+            scale_multiplier = torch.where(
+                is_sub4px,
+                torch.full_like(candidate_areas, self.config.sub4px_scale_boost),
+                torch.ones_like(candidate_areas),
+            )
+        else:
+            scale_multiplier = torch.ones(N, device=student_logits.device)
+
+        # KL Divergence per sample
+        kl_per_sample = F.kl_div(p_s, p_t, reduction="none").sum(dim=-1)  # [N]
+        l_kd = (consensus_weights * scale_multiplier * kl_per_sample).mean() * (T ** 2)
+
+        # 2. Relational Similarity Matrix Distillation
+        proj_student_feats = self.feat_proj(student_features)
+        fused_teacher_feats = (
+            self.config.local_teacher_weight * local_teacher_features
+            + self.config.temporal_teacher_weight * temporal_teacher_features
+        )
+
+        l_rel = self._compute_relational_loss(proj_student_feats, fused_teacher_feats)
+
+        # 3. Direct Feature Cosine / MSE Alignment
+        l_feat = F.mse_loss(proj_student_feats, fused_teacher_feats, reduction="mean")
+
+        # Total Distillation Loss
+        total_loss = (
+            self.config.weight_kd * l_kd
+            + self.config.weight_relation * l_rel
+            + self.config.weight_feature * l_feat
+        )
+
+        return {
+            "loss_distill_total": total_loss,
+            "loss_distill_kd": l_kd,
+            "loss_distill_relation": l_rel,
+            "loss_distill_feature": l_feat,
+            "mean_teacher_consensus": consensus_weights.mean(),
+        }
 
 
 # Convenience re-exports for Ticket E52 Temporal Distillation

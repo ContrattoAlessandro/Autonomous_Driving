@@ -1,0 +1,50 @@
+{
+  "relevance_metrics": {
+    "v4_baseline": {
+      "precision_pct": 91.3,
+      "recall_pct": 89.4,
+      "f1_pct": 90.34,
+      "auprc": 0.947,
+      "cross_lane_fp_rate_pct": 2.1,
+      "adjacent_turn_bay_fp_rate_pct": 3.8
+    },
+    "v5a_geometry_v1": {
+      "precision_pct": 92.4,
+      "recall_pct": 89.6,
+      "f1_pct": 90.98,
+      "auprc": 0.9525,
+      "cross_lane_fp_rate_pct": 1.8,
+      "adjacent_turn_bay_fp_rate_pct": 3.1
+    },
+    "v5a_geometry_v2_corridor": {
+      "precision_pct": 96.45,
+      "recall_pct": 90.2,
+      "f1_pct": 93.22,
+      "auprc": 0.9715,
+      "cross_lane_fp_rate_pct": 0.55,
+      "adjacent_turn_bay_fp_rate_pct": 0.9
+    },
+    "oracle_geometry_ceiling_e60": {
+      "precision_pct": 98.8,
+      "recall_pct": 89.5,
+      "f1_pct": 93.92,
+      "auprc": 0.978,
+      "cross_lane_fp_rate_pct": 0.25,
+      "adjacent_turn_bay_fp_rate_pct": 0.4
+    }
+  },
+  "error_decomposition_and_resolution": {
+    "residual_cross_lane_errors_e60": 1.85,
+    "errors_resolved_by_e74_pp": 1.55,
+    "error_resolution_rate_pct": 83.78,
+    "empirical_ceiling_e64_auprc": 0.982,
+    "relevance_headroom_closed_pct": 70.0
+  },
+  "latency_and_safety_veto_checks": {
+    "geometry_v1_latency_ms": 0.22,
+    "geometry_v2_latency_ms": 0.28,
+    "delta_latency_ms": 0.06,
+    "cross_lane_fpr_veto_pass": true,
+    "relevant_red_recall_tau95_pct": 98.4
+  }
+}

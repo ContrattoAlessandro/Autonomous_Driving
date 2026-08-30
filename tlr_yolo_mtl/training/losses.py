@@ -258,6 +258,7 @@ class MultiTaskLossWeights:
     quality: float = 0.0
     refinement: float = 0.0
     temporal_distillation: float = 0.0
+    multi_teacher_distillation: float = 0.0
 
 
 @dataclass(slots=True)
@@ -287,6 +288,8 @@ class TLRMultiTaskLossResult:
     refinement_matches: int = 0
     temporal_distillation: torch.Tensor | None = None
     temporal_distillation_matches: int = 0
+    multi_teacher_distillation: torch.Tensor | None = None
+    multi_teacher_distillation_matches: int = 0
 
     # Read-only compatibility aliases for historical diagnostics.
     @property

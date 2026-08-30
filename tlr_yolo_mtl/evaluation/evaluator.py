@@ -177,7 +177,7 @@ def evaluate_validation_epoch(
 
                 # 2. Extract GT for image b
                 b_mask = (batch["object_batch_idx"] == b)
-                gt_xywh = batch["object_bboxes"][b_mask].cpu().numpy()
+                gt_xywh = batch["object_bboxes"][b_mask].cpu().numpy().reshape(-1, 4)
                 if len(gt_xywh) > 0:
                     cx, cy, bw, bh = (
                         gt_xywh[:, 0],
@@ -187,11 +187,11 @@ def evaluate_validation_epoch(
                     )
                     gt_xyxy = np.stack(
                         [cx - bw / 2, cy - bh / 2, cx + bw / 2, cy + bh / 2], axis=-1
-                    )
+                    ).reshape(-1, 4)
                     gt_cls = batch["object_cls"][b_mask].reshape(-1).cpu().numpy()
                     gt_st = batch["object_state"][b_mask].reshape(-1).cpu().numpy()
                     gt_rd = batch["object_round"][b_mask].reshape(-1).cpu().numpy()
-                    gt_mv = batch["object_maneuver"][b_mask].cpu().numpy()
+                    gt_mv = batch["object_maneuver"][b_mask].reshape(-1, 3).cpu().numpy()
                     gt_rl = batch["object_relevance"][b_mask].reshape(-1).cpu().numpy()
                 else:
                     gt_xyxy = np.zeros((0, 4), dtype=float)

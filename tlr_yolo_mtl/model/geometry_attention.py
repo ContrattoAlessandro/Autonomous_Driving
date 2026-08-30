@@ -564,3 +564,277 @@ def attach_geometry_aware_unified_relevance_head(
     )
     model_wrapper.model.model[-1] = unified
     return unified
+
+
+# =============================================================================
+# Ticket E74: Geometry-Aware Cross-Attention v2 (Perspective Corridor Alignment)
+# =============================================================================
+
+class ExplicitRelativeGeometryEncoderV2(nn.Module):
+    """Encodes 20-dimensional perspective corridor and directional alignment descriptors (Ticket E74).
+    
+    Resolves the 80.95% residual cross-lane false alarms by modeling:
+    1. Camera perspective trapezoidal corridor narrowing toward the horizon.
+    2. Explicit quadratic lateral corridor containment penalty.
+    3. Vertical ordering consistency (traffic lights above ground road arrows).
+    4. Fine-grained directional compatibility priors.
+    """
+
+    def __init__(self, ego_x: float = 0.5, p_drop: float = 0.0, lane_sigma: float = 0.35) -> None:
+        super().__init__()
+        self.ego_x = float(ego_x)
+        self.p_drop = float(p_drop)
+        self.lane_sigma = float(lane_sigma)
+
+    def forward(
+        self,
+        tl_boxes: torch.Tensor,
+        arrow_boxes: torch.Tensor,
+        tl_scores: torch.Tensor,
+        arrow_scores: torch.Tensor,
+        tl_round: torch.Tensor,
+        tl_maneuver: torch.Tensor,
+        arrow_maneuver: torch.Tensor,
+        arrow_ego_lane: torch.Tensor | None = None,
+        tl_valid: torch.Tensor | None = None,
+        arrow_valid: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Compute enhanced 20D relative geometric descriptor tensor phi_ij."""
+        B, K_TL, _ = tl_boxes.shape
+        K_Arrow = arrow_boxes.shape[1]
+
+        tl_x = tl_boxes[:, :, None, 0]  # [B, K_TL, 1]
+        tl_y = tl_boxes[:, :, None, 1]  # [B, K_TL, 1]
+        tl_w = tl_boxes[:, :, None, 2].clamp_min(1e-5)
+        tl_h = tl_boxes[:, :, None, 3].clamp_min(1e-5)
+
+        ar_x = arrow_boxes[:, None, :, 0]  # [B, 1, K_Arrow]
+        ar_y = arrow_boxes[:, None, :, 1]  # [B, 1, K_Arrow]
+        ar_w = arrow_boxes[:, None, :, 2].clamp_min(1e-5)
+        ar_h = arrow_boxes[:, None, :, 3].clamp_min(1e-5)
+
+        # 1. Perspective-Corrected Lateral Offset (divided by depth surrogate)
+        mean_y = (ar_y + tl_y) * 0.5 + 0.1
+        delta_x = ar_x - tl_x
+        delta_y = ar_y - tl_y
+        persp_dx = delta_x / mean_y
+
+        # 2. Scale-Normalized Offsets
+        norm_dx = delta_x / tl_w
+        norm_dy = delta_y / tl_h
+
+        # 3. Log Ratios
+        log_w_ratio = torch.log(tl_w / ar_w).clamp(-5.0, 5.0).expand(-1, -1, K_Arrow)
+        log_h_ratio = torch.log(tl_h / ar_h).clamp(-5.0, 5.0).expand(-1, -1, K_Arrow)
+        log_area_tl = torch.log(tl_w * tl_h + 1e-7).expand(-1, -1, K_Arrow)
+        log_area_ar = torch.log(ar_w * ar_h + 1e-7).expand(-1, K_TL, -1)
+        log_area_ratio = (log_area_tl - log_area_ar).clamp(-6.0, 6.0)
+
+        # 4. Vertical Perspective
+        tl_y_exp = tl_y.expand(-1, -1, K_Arrow)
+        ar_y_exp = ar_y.expand(-1, K_TL, -1)
+
+        # 5. Ego Perspective
+        ego_dx_ar = (ar_x - self.ego_x).expand(-1, K_TL, -1)
+
+        # 6. Directional Affinity
+        tl_man_norm = tl_maneuver / tl_maneuver.sum(dim=-1, keepdim=True).clamp_min(1e-6)
+        directional_affinity = (
+            tl_man_norm[:, :, None, :] * arrow_maneuver[:, None, :, :]
+        ).sum(dim=-1)
+
+        # 7. Candidate Confidences
+        s_tl_exp = tl_scores[:, :, None].expand(-1, -1, K_Arrow)
+        s_ar_exp = arrow_scores[:, None, :].expand(-1, K_TL, -1)
+
+        # 8. Perspective Corridor Containment Score
+        corridor_containment = torch.exp(- (persp_dx.square()) / (2.0 * (self.lane_sigma ** 2)))
+
+        # 9. Dynamic Perspective Corridor Width
+        corridor_width = 0.35 * (1.0 - 0.5 * ar_y_exp) + 0.05
+        corridor_violation = (persp_dx.abs() - corridor_width).clamp_min(0.0)
+
+        # 10. Vertical Ordering Consistency (TL must be above road arrow, y_tl < y_ar)
+        vertical_ordering = torch.sigmoid((ar_y_exp - tl_y_exp) * 10.0)
+
+        # 11. Arrow Ego-Lane Prior
+        if arrow_ego_lane is not None:
+            ar_ego = arrow_ego_lane[:, None, :].expand(-1, K_TL, -1)
+        else:
+            ar_ego = torch.ones_like(corridor_containment)
+
+        # 12. Composite Plausibility Metric
+        composite_plausibility = corridor_containment * vertical_ordering * directional_affinity
+
+        # Assemble 20D normalized descriptor
+        phi = torch.stack(
+            (
+                delta_x.clamp(-1.0, 1.0),
+                delta_y.clamp(-1.0, 1.0),
+                persp_dx.clamp(-3.0, 3.0),
+                norm_dx.clamp(-10.0, 10.0),
+                norm_dy.clamp(-10.0, 10.0),
+                log_w_ratio,
+                log_h_ratio,
+                log_area_ratio,
+                tl_y_exp.clamp(0.0, 1.0),
+                ar_y_exp.clamp(0.0, 1.0),
+                ego_dx_ar.clamp(-1.0, 1.0),
+                directional_affinity.clamp(0.0, 1.0),
+                tl_round[:, :, None].expand(-1, -1, K_Arrow).clamp(0.0, 1.0),
+                s_tl_exp.clamp(0.0, 1.0),
+                s_ar_exp.clamp(0.0, 1.0),
+                corridor_containment.clamp(0.0, 1.0),
+                corridor_width.clamp(0.0, 1.0),
+                corridor_violation.clamp(0.0, 2.0),
+                vertical_ordering.clamp(0.0, 1.0),
+                composite_plausibility.clamp(0.0, 1.0),
+            ),
+            dim=-1,
+        )  # [B, K_TL, K_Arrow, 20]
+
+        if self.training and self.p_drop > 0.0:
+            drop_mask = (torch.rand(B, K_TL, K_Arrow, 1, device=phi.device) > self.p_drop).float()
+            phi = phi * drop_mask
+
+        return phi
+
+
+class GeometryAttentionBiasMLPV2(nn.Module):
+    """Enhanced 2-layer MLP mapping 20D geometric descriptors to attention biases (Ticket E74)."""
+
+    def __init__(self, in_features: int = 20, hidden_dim: int = 48, heads: int = 4) -> None:
+        super().__init__()
+        self.network = nn.Sequential(
+            nn.Linear(in_features, hidden_dim),
+            nn.LayerNorm(hidden_dim),
+            nn.SiLU(inplace=True),
+            nn.Linear(hidden_dim, heads),
+        )
+        nn.init.zeros_(self.network[-1].weight)
+        nn.init.zeros_(self.network[-1].bias)
+
+    def forward(self, phi: torch.Tensor) -> torch.Tensor:
+        """Compute per-head attention bias matrix [B, heads, K_TL, K_Arrow]."""
+        bias = self.network(phi)  # [B, K_TL, K_Arrow, heads]
+        return bias.permute(0, 3, 1, 2)
+
+
+class GeometryAwareCrossAttentionV2(nn.Module):
+    """Geometry-Aware Cross-Attention v2 with Perspective Corridor Modeling (Ticket E74)."""
+
+    def __init__(
+        self,
+        dimension: int = 128,
+        heads: int = 4,
+        hidden_dim: int = 48,
+        p_drop: float = 0.0,
+        lane_sigma: float = 0.35,
+        use_confidence_gating: bool = True,
+    ) -> None:
+        super().__init__()
+        if dimension <= 0 or heads <= 0 or dimension % heads:
+            raise ValueError("attention dimension must be divisible by heads")
+        self.dimension = int(dimension)
+        self.heads = int(heads)
+        self.head_dimension = self.dimension // self.heads
+        self.use_confidence_gating = bool(use_confidence_gating)
+
+        self.query = nn.Linear(dimension, dimension)
+        self.key = nn.Linear(dimension, dimension)
+        self.value = nn.Linear(dimension, dimension)
+        self.output = nn.Linear(dimension, dimension)
+
+        self.geometry_encoder = ExplicitRelativeGeometryEncoderV2(
+            ego_x=0.5, p_drop=p_drop, lane_sigma=lane_sigma
+        )
+        self.geometry_mlp = GeometryAttentionBiasMLPV2(
+            in_features=20, hidden_dim=hidden_dim, heads=heads
+        )
+
+        self.null_token = nn.Parameter(torch.zeros(1, 1, dimension))
+        nn.init.normal_(self.null_token, std=0.02)
+        self.round_wildcard_logit = nn.Parameter(torch.zeros(1))
+        self.gate = nn.Parameter(torch.zeros(1))
+        self.normalization = nn.LayerNorm(dimension)
+
+    def forward(
+        self,
+        traffic_tokens: torch.Tensor,
+        arrow_tokens: torch.Tensor,
+        *,
+        traffic_boxes: torch.Tensor,
+        arrow_boxes: torch.Tensor,
+        traffic_scores: torch.Tensor,
+        arrow_scores: torch.Tensor,
+        traffic_round: torch.Tensor,
+        traffic_maneuver: torch.Tensor,
+        arrow_maneuver: torch.Tensor,
+        arrow_ego_lane: torch.Tensor | None = None,
+        arrow_valid: torch.Tensor,
+        traffic_valid: torch.Tensor | None = None,
+        enabled: bool = True,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Execute perspective corridor geometry-aware cross attention."""
+        batch, traffic_count, _ = traffic_tokens.shape
+        arrow_count = arrow_tokens.shape[1]
+
+        if traffic_valid is None:
+            traffic_valid = torch.ones((batch, traffic_count), dtype=torch.bool, device=traffic_tokens.device)
+
+        null = self.null_token.expand(batch, -1, -1)
+        keys_values = torch.cat((arrow_tokens, null), dim=1)
+
+        query = self.query(traffic_tokens).reshape(
+            batch, traffic_count, self.heads, self.head_dimension
+        ).transpose(1, 2)
+        key = self.key(keys_values).reshape(
+            batch, arrow_count + 1, self.heads, self.head_dimension
+        ).transpose(1, 2)
+        value = self.value(keys_values).reshape(
+            batch, arrow_count + 1, self.heads, self.head_dimension
+        ).transpose(1, 2)
+
+        logits = torch.matmul(query, key.transpose(-2, -1)) / (self.head_dimension ** 0.5)
+
+        phi = self.geometry_encoder(
+            tl_boxes=traffic_boxes,
+            arrow_boxes=arrow_boxes,
+            tl_scores=traffic_scores,
+            arrow_scores=arrow_scores,
+            tl_round=traffic_round,
+            tl_maneuver=traffic_maneuver,
+            arrow_maneuver=arrow_maneuver,
+            arrow_ego_lane=arrow_ego_lane,
+            tl_valid=traffic_valid,
+            arrow_valid=arrow_valid,
+        )
+
+        geometry_bias_arrows = self.geometry_mlp(phi)  # [B, H, K_TL, K_Arrow]
+        null_bias = torch.zeros(
+            (batch, self.heads, traffic_count, 1), device=logits.device, dtype=logits.dtype
+        )
+        geometry_bias = torch.cat((geometry_bias_arrows, null_bias), dim=-1)
+
+        # Modulate attention logits with 20D geometry bias
+        modulated_logits = logits + geometry_bias
+
+        # Key masking for invalid arrow proposals
+        valid_keys = torch.cat(
+            (arrow_valid, torch.ones((batch, 1), dtype=torch.bool, device=arrow_valid.device)), dim=1
+        )
+        key_mask = ~valid_keys[:, None, None, :]
+        modulated_logits = modulated_logits.masked_fill(key_mask, -1e4)
+
+        attention_weights = F.softmax(modulated_logits, dim=-1)
+        context = torch.matmul(attention_weights, value)  # [B, H, K_TL, d_h]
+        context = context.transpose(1, 2).reshape(batch, traffic_count, self.dimension)
+        projected = self.output(context)
+
+        if enabled:
+            gate_value = self.gate.sigmoid()
+            conditioned_tokens = self.normalization(traffic_tokens + gate_value * projected)
+        else:
+            conditioned_tokens = self.normalization(traffic_tokens)
+
+        return conditioned_tokens, attention_weights, geometry_bias

@@ -39,16 +39,22 @@ from .geometry_attention import (
 )
 from .neck import (
     ScaleAwareFeatureRelay,
+    ScaleAwareFeatureRelayV2,
     ScaleAwareRelayConfig,
+    ScaleAwareRelayV2Config,
     register_neck_modules,
 )
 from .quality import (
     NWDQualityConfidenceHead,
     QualityScoringConfig,
+    compute_quality_aware_scores,
+    compute_scale_conditioned_alpha,
+    compute_scale_conditioned_quality_scores,
 )
 from .refinement import (
     SparseCandidateRefinementHead,
     SparseRefinementConfig,
+    select_dynamic_refinement_budget,
 )
 from .unified import (
     UnifiedHeadConfig,
@@ -93,10 +99,16 @@ __all__ = [
     "attach_geometry_aware_unified_relevance_head",
     "SparseCandidateRefinementHead",
     "SparseRefinementConfig",
+    "select_dynamic_refinement_budget",
     "NWDQualityConfidenceHead",
     "QualityScoringConfig",
+    "compute_quality_aware_scores",
+    "compute_scale_conditioned_alpha",
+    "compute_scale_conditioned_quality_scores",
     "ScaleAwareFeatureRelay",
+    "ScaleAwareFeatureRelayV2",
     "ScaleAwareRelayConfig",
+    "ScaleAwareRelayV2Config",
     "register_neck_modules",
 ]
 

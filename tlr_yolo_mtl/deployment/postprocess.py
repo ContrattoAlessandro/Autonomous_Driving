@@ -9,6 +9,7 @@ from torchvision.ops import nms
 
 from ..model.arrows import gather_arrow_directions
 from ..model.attributes import gather_candidate_attributes
+from ..model.quality import compute_scale_conditioned_quality_scores
 from ..model.relevance import (
     combine_detection_relevance_scores,
     gather_candidate_relevance,
@@ -116,6 +117,9 @@ def size_adaptive_nms(
     *,
     quality_scores: torch.Tensor | None = None,
     quality_alpha: float = 0.70,
+    scale_conditioned: bool = False,
+    alpha_min: float = 0.38,
+    alpha_max: float = 0.90,
     iou_threshold: float = 0.7,
     nwd_threshold: float = 0.5,
     nwd_constant: float = 12.0,
@@ -124,7 +128,7 @@ def size_adaptive_nms(
     """Size-Adaptive NMS: Gaussian NWD for tiny boxes (< area_thresh), IoU for larger boxes.
     
     If quality_scores is provided, candidate ranking order is determined by the joint
-    quality-aware score: s = scores^alpha * quality_scores^(1 - alpha).
+    quality-aware score: s = scores^alpha * quality_scores^(1 - alpha) or continuous scale-conditioned scoring.
     """
     if boxes.ndim != 2 or boxes.shape[1] != 4:
         raise ValueError("boxes must have shape [N, 4]")
@@ -147,10 +151,21 @@ def size_adaptive_nms(
         scores_work = scores
         quality_work = quality_scores
 
-    if quality_work is not None and quality_alpha < 1.0:
-        p = scores_work.clamp(1e-7, 1.0)
-        q = quality_work.clamp(1e-7, 1.0)
-        ranking_scores = p.pow(quality_alpha) * q.pow(1.0 - quality_alpha)
+    if quality_work is not None:
+        if scale_conditioned:
+            ranking_scores = compute_scale_conditioned_quality_scores(
+                scores_work,
+                quality_work,
+                boxes_work,
+                alpha_min=alpha_min,
+                alpha_max=alpha_max,
+            )
+        elif quality_alpha < 1.0:
+            p = scores_work.clamp(1e-7, 1.0)
+            q = quality_work.clamp(1e-7, 1.0)
+            ranking_scores = p.pow(quality_alpha) * q.pow(1.0 - quality_alpha)
+        else:
+            ranking_scores = scores_work
     else:
         ranking_scores = scores_work
 

@@ -67,7 +67,10 @@ from tlr_yolo_mtl.evaluation.metrics import (
     multilabel_metrics,
     validation_selection_score,
 )
+from tlr_yolo_mtl.model.dysample import register_dysample_modules
+from tlr_yolo_mtl.model.geometry_attention import attach_geometry_aware_unified_relevance_head
 from tlr_yolo_mtl.model.milestone2 import build_detection_model
+from tlr_yolo_mtl.model.neck import register_neck_modules
 from tlr_yolo_mtl.model.unified import (
     ROAD_ARROW_CLASS,
     TRAFFIC_LIGHT_CLASS,
@@ -78,6 +81,9 @@ from tlr_yolo_mtl.training.data import (
     CanonicalMultiTaskDataset,
     canonical_multitask_collate,
 )
+
+register_neck_modules()
+register_dysample_modules()
 
 
 @dataclass
@@ -117,7 +123,22 @@ def load_model_with_weights(
 
     wrapper = build_detection_model(PROJECT_ROOT / cfg["model_config"])
     arch_cfg = cfg.get("architecture", {})
-    attach_unified_relevance_head(wrapper, config=UnifiedHeadConfig(**arch_cfg))
+    head_kwargs = {
+        k: v for k, v in arch_cfg.items()
+        if k in UnifiedHeadConfig.__dataclass_fields__
+    }
+
+    if arch_cfg.get("geometry_attention", {}).get("enabled", False):
+        geom_cfg = arch_cfg.get("geometry_attention", {})
+        attach_geometry_aware_unified_relevance_head(
+            wrapper,
+            config=UnifiedHeadConfig(**head_kwargs),
+            hidden_dim=int(geom_cfg.get("hidden_dim", 32)),
+            p_drop=float(geom_cfg.get("p_drop", 0.0)),
+            use_confidence_gating=bool(geom_cfg.get("use_confidence_gate", True)),
+        )
+    else:
+        attach_unified_relevance_head(wrapper, config=UnifiedHeadConfig(**head_kwargs))
 
     if weights_path.is_file():
         ckpt = torch.load(weights_path, map_location=device, weights_only=False)
