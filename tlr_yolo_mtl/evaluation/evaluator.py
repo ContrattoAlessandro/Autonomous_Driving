@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from typing import Any, Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Mapping, Sequence
 
 import numpy as np
 import torch
@@ -11,8 +11,10 @@ import torchvision
 from torch import nn
 from torch.utils.data import DataLoader
 
-from ..deployment.postprocess import xywh_to_xyxy
-from ..training.losses import TLRMultiTaskCriterion
+from ..deployment.postprocess import size_adaptive_nms, xywh_to_xyxy
+
+if TYPE_CHECKING:
+    from ..training.losses import TLRMultiTaskCriterion
 from .matching import greedy_iou_match
 from .metrics import (
     binary_classification_metrics,
@@ -144,8 +146,13 @@ def evaluate_validation_epoch(
                         c_indices = torch.nonzero(keep_mask, as_tuple=False).reshape(-1)
                         boxes_xywh = decoded[b, :4, c_indices].transpose(0, 1)
                         boxes_xyxy_px = xywh_to_xyxy(boxes_xywh)
-                        kept_nms = torchvision.ops.nms(
-                            boxes_xyxy_px, scores_c[c_indices], iou_threshold
+                        kept_nms = size_adaptive_nms(
+                            boxes_xyxy_px,
+                            scores_c[c_indices],
+                            nwd_threshold=0.50,
+                            iou_threshold=iou_threshold,
+                            nwd_constant=12.0 if c == 0 else 24.0,
+                            area_threshold=64.0 if c == 0 else 1024.0,
                         )[:max_detections]
                         kept_dense = c_indices[kept_nms]
                         kept_px = boxes_xyxy_px[kept_nms]
@@ -363,7 +370,7 @@ def evaluate_validation_epoch(
 
     # Composite selection score
     score_inputs = {
-        "traffic_light_tiny_ap": det_map.get("ap_small", 0.0),
+        "traffic_light_tiny_ap": det_map.get("ap_tl_sub8px", det_map.get("ap_small", 0.0)),
         "arrow_ap": det_map.get("ap_arrow_50", 0.0),
         "state_macro_f1": state_macro_f1 if not math.isnan(state_macro_f1) else 0.0,
         "round_f1": round_f1 if not math.isnan(round_f1) else 0.0,

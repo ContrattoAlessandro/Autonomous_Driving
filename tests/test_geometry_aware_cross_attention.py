@@ -47,16 +47,32 @@ def test_explicit_relative_geometry_encoder_shapes():
         arrow_valid=arrow_valid,
     )
 
-    assert phi.shape == (B, K_TL, K_Arrow, 14)
+    # Default 18D Vanishing Point descriptor
+    assert phi.shape == (B, K_TL, K_Arrow, 18)
     assert not torch.isnan(phi).any()
     assert not torch.isinf(phi).any()
+
+    # Legacy 14D descriptor mode check
+    encoder_14d = ExplicitRelativeGeometryEncoder(ego_x=0.5, include_vanishing_point=False, p_drop=0.0)
+    phi_14d = encoder_14d(
+        tl_boxes=tl_boxes,
+        arrow_boxes=arrow_boxes,
+        tl_scores=tl_scores,
+        arrow_scores=arrow_scores,
+        tl_round=tl_round,
+        tl_maneuver=tl_maneuver,
+        arrow_maneuver=arrow_maneuver,
+        tl_valid=tl_valid,
+        arrow_valid=arrow_valid,
+    )
+    assert phi_14d.shape == (B, K_TL, K_Arrow, 14)
 
 
 def test_geometry_attention_bias_mlp_init():
     B, K_TL, K_Arrow, H = 2, 4, 6, 4
-    mlp = GeometryAttentionBiasMLP(in_features=14, hidden_dim=32, heads=H)
+    mlp = GeometryAttentionBiasMLP(in_features=18, hidden_dim=32, heads=H)
 
-    phi = torch.randn(B, K_TL, K_Arrow, 14)
+    phi = torch.randn(B, K_TL, K_Arrow, 18)
     bias = mlp(phi)
 
     assert bias.shape == (B, H, K_TL, K_Arrow)

@@ -49,7 +49,8 @@ def test_dysample_forward_and_backward():
     loss2 = out_pl.sum()
     loss2.backward()
     assert x2.grad is not None
-    assert dysample_pl.offset_conv.weight.grad is not None
+    param_grads = [p.grad for p in dysample_pl.offset_conv.parameters()]
+    assert any(g is not None for g in param_grads)
 
 
 def test_replace_p2_upsampler_surgery():

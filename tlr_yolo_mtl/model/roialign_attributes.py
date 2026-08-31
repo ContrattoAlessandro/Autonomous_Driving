@@ -154,11 +154,112 @@ class CandidateMultiScaleROIAlign(nn.Module):
         return fused.view(B, K, -1)
 
 
+class ScaleAdaptiveROIAlign(nn.Module):
+    """Scale-Adaptive Multi-Resolution ROIAlign Feature Extractor (Ticket 03).
+
+    Scientific Motivation:
+    Fixed 5x5 ROIAlign grids uniformly sample 25 points regardless of candidate scale.
+    For distant sub-8px signals (<64 px^2), a fixed 5x5 grid samples redundant sub-pixel coordinates
+    or blurs the isolated glowing disc (Red/Yellow/Green) with background asphalt/sky.
+    
+    ScaleAdaptiveROIAlign introduces a multi-resolution sampling mechanism:
+    - High-frequency 7x7 grid (49 sampling points) sampling fine chromatic structure on P2 and P3.
+    - Sub-8px Chromatic Disc Isolation: Center 5x5 slice (1:6, 1:6) focuses directly on the optical emitter.
+    - Standard/Large Signal Multi-Scale Pooling: Hierarchical adaptive anti-aliased pooling over (5, 5).
+    - Scale-Conditioned Continuous Disc Blending:
+        gamma(s_i) = Sigmoid((8.0 - s_i) / 2.0 + scale_bias)
+        feat = (1 - gamma) * feat_pooled + gamma * feat_center_disc
+    """
+
+    def __init__(
+        self,
+        channels_p2: int = 64,
+        channels_p3: int = 128,
+        fine_roi_size: tuple[int, int] = (7, 7),
+        canonical_roi_size: tuple[int, int] = (5, 5),
+        embed_dim: int = 128,
+        stride_p2: float = 4.0,
+        stride_p3: float = 8.0,
+    ) -> None:
+        super().__init__()
+        self.channels_p2 = int(channels_p2)
+        self.channels_p3 = int(channels_p3)
+        self.fine_roi_size = fine_roi_size
+        self.canonical_roi_size = canonical_roi_size
+        self.embed_dim = int(embed_dim)
+        self.spatial_scale_p2 = 1.0 / stride_p2
+        self.spatial_scale_p3 = 1.0 / stride_p3
+
+        in_dim = (channels_p2 + channels_p3) * canonical_roi_size[0] * canonical_roi_size[1]
+        self.proj = nn.Sequential(
+            nn.Linear(in_dim, embed_dim),
+            nn.LayerNorm(embed_dim),
+            nn.SiLU(inplace=True),
+            nn.Linear(embed_dim, embed_dim),
+            nn.LayerNorm(embed_dim),
+        )
+
+        self.scale_bias = nn.Parameter(torch.tensor(0.0))
+
+    def forward(
+        self,
+        p2_feat: torch.Tensor,
+        p3_feat: torch.Tensor,
+        candidate_boxes_xyxy: torch.Tensor,  # [B, K, 4]
+        img_shape: tuple[int, int] | None = None,
+        alpha_p2: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Extracts scale-adaptive multi-resolution ROI features."""
+        B, K, _ = candidate_boxes_xyxy.shape
+        boxes = candidate_boxes_xyxy
+        if img_shape is not None and boxes.numel() > 0 and boxes.max() <= 1.05:
+            h, w = img_shape
+            scale = torch.tensor([w, h, w, h], device=boxes.device, dtype=boxes.dtype)
+            boxes = boxes * scale
+
+        # Prepare 5D tensor: [batch_index, x1, y1, x2, y2]
+        batch_idx = torch.arange(B, device=boxes.device, dtype=boxes.dtype).unsqueeze(1).expand(B, K).reshape(-1, 1)
+        boxes_flat = boxes.reshape(B * K, 4)
+        boxes_5d = torch.cat([batch_idx, boxes_flat], dim=1)
+
+        # Calculate bounding box scale: s_i = max(w, h) in pixels
+        w_box = (boxes_flat[:, 2] - boxes_flat[:, 0]).clamp(min=1.0)
+        h_box = (boxes_flat[:, 3] - boxes_flat[:, 1]).clamp(min=1.0)
+        box_scale = torch.max(w_box, h_box).view(B * K, 1, 1, 1)
+
+        scale_p2 = 2.0 * alpha_p2 if alpha_p2 is not None else 1.0
+        scale_p3 = 2.0 * (1.0 - alpha_p2) if alpha_p2 is not None else 1.0
+
+        # 1. Extract Fine 7x7 Grid over P2 and P3
+        roi_p2_fine = roi_align(p2_feat, boxes_5d, output_size=self.fine_roi_size, spatial_scale=self.spatial_scale_p2, aligned=True)
+        roi_p3_fine = roi_align(p3_feat, boxes_5d, output_size=self.fine_roi_size, spatial_scale=self.spatial_scale_p3, aligned=True)
+
+        # 2. Canonical pooled representation (smooth spatial envelope for standard/large signals)
+        roi_p2_canon = F.adaptive_avg_pool2d(roi_p2_fine, self.canonical_roi_size)
+        roi_p3_canon = F.adaptive_avg_pool2d(roi_p3_fine, self.canonical_roi_size)
+
+        # 3. High-resolution center slice (1:6, 1:6) for sub-8px isolated chromatic disc
+        roi_p2_disc = roi_p2_fine[:, :, 1:6, 1:6]
+        roi_p3_disc = roi_p3_fine[:, :, 1:6, 1:6]
+
+        # 4. Scale-conditioned gating: gamma -> 1 for s < 8px, gamma -> 0 for s > 16px
+        gamma = torch.sigmoid((8.0 - box_scale) / 2.0 + self.scale_bias)
+
+        roi_p2_final = (1.0 - gamma) * roi_p2_canon + gamma * roi_p2_disc
+        roi_p3_final = (1.0 - gamma) * roi_p3_canon + gamma * roi_p3_disc
+
+        flat_p2 = roi_p2_final.flatten(1) * scale_p2
+        flat_p3 = roi_p3_final.flatten(1) * scale_p3
+
+        fused = self.proj(torch.cat([flat_p2, flat_p3], dim=1))
+        return fused.view(B, K, self.embed_dim)
+
+
 class TaskSpecificGatedROIAlign(nn.Module):
-    """Decoupled Task-Specific Gated ROIAlign Feature Extractor (Ticket E41).
+    """Decoupled Task-Specific Gated ROIAlign Feature Extractor (Ticket E41 & Ticket 03).
 
     Extracts multi-scale ROIAlign features across P2 (stride 4) and P3 (stride 8) with:
-    - Selective 5x5 ROIAlign grid for State classification (25 spatial points)
+    - Scale-Adaptive or 5x5 ROIAlign grid for State classification (fine-grained chroma/lens structure)
     - Lightweight 3x3 ROIAlign grid for Roundness, Maneuver, and Relevance candidate tokens (9 points)
     - Learnable task-specific gate parameters (alpha_state, alpha_round, alpha_man, alpha_rel)
       decoupling fine-grained chromatic acuity (P2) from contextual receptive field semantics (P3).
@@ -174,6 +275,7 @@ class TaskSpecificGatedROIAlign(nn.Module):
         stride_p2: float = 4.0,
         stride_p3: float = 8.0,
         use_task_gating: bool = True,
+        scale_adaptive_state: bool = False,
     ) -> None:
         super().__init__()
         self.channels_p2 = int(channels_p2)
@@ -184,16 +286,30 @@ class TaskSpecificGatedROIAlign(nn.Module):
         self.spatial_scale_p2 = 1.0 / stride_p2
         self.spatial_scale_p3 = 1.0 / stride_p3
         self.use_task_gating = bool(use_task_gating)
+        self.scale_adaptive_state = bool(scale_adaptive_state)
 
-        # 1. State feature projection (5x5 ROIAlign grid)
-        in_dim_state = (channels_p2 + channels_p3) * state_roi_size[0] * state_roi_size[1]
-        self.fusion_state = nn.Sequential(
-            nn.Linear(in_dim_state, embed_dim),
-            nn.LayerNorm(embed_dim),
-            nn.SiLU(inplace=True),
-            nn.Linear(embed_dim, embed_dim),
-            nn.LayerNorm(embed_dim),
-        )
+        # 1. State feature extraction
+        if self.scale_adaptive_state:
+            self.scale_adaptive_extractor = ScaleAdaptiveROIAlign(
+                channels_p2=channels_p2,
+                channels_p3=channels_p3,
+                fine_roi_size=(7, 7),
+                canonical_roi_size=state_roi_size,
+                embed_dim=embed_dim,
+                stride_p2=stride_p2,
+                stride_p3=stride_p3,
+            )
+            self.fusion_state = None
+        else:
+            self.scale_adaptive_extractor = None
+            in_dim_state = (channels_p2 + channels_p3) * state_roi_size[0] * state_roi_size[1]
+            self.fusion_state = nn.Sequential(
+                nn.Linear(in_dim_state, embed_dim),
+                nn.LayerNorm(embed_dim),
+                nn.SiLU(inplace=True),
+                nn.Linear(embed_dim, embed_dim),
+                nn.LayerNorm(embed_dim),
+            )
 
         # 2. Auxiliary feature projections (3x3 ROIAlign grid)
         in_dim_aux = (channels_p2 + channels_p3) * aux_roi_size[0] * aux_roi_size[1]
@@ -251,16 +367,7 @@ class TaskSpecificGatedROIAlign(nn.Module):
         candidate_boxes_xyxy: torch.Tensor,  # [B, K, 4]
         img_shape: tuple[int, int] | None = None,
     ) -> dict[str, torch.Tensor]:
-        """Extracts task-decoupled candidate embeddings across 5x5 State and 3x3 Auxiliary grids.
-
-        Returns:
-            Dictionary containing:
-                - state_tokens: [B, K, embed_dim]
-                - round_tokens: [B, K, embed_dim]
-                - man_tokens: [B, K, embed_dim]
-                - candidate_tokens: [B, K, embed_dim] (relevance/general token)
-                - task_gates: dictionary of scalar gate tensors
-        """
+        """Extracts task-decoupled candidate embeddings across State and Auxiliary grids."""
         B, K, _ = candidate_boxes_xyxy.shape
         boxes = candidate_boxes_xyxy
         if img_shape is not None and boxes.numel() > 0 and boxes.max() <= 1.05:
@@ -268,45 +375,12 @@ class TaskSpecificGatedROIAlign(nn.Module):
             scale = torch.tensor([w, h, w, h], device=boxes.device, dtype=boxes.dtype)
             boxes = boxes * scale
 
-        boxes_list = [boxes[b] for b in range(B)]
+        # Prepare 5D tensor: [batch_index, x1, y1, x2, y2]
+        batch_idx = torch.arange(B, device=boxes.device, dtype=boxes.dtype).unsqueeze(1).expand(B, K).reshape(-1, 1)
+        boxes_flat = boxes.reshape(B * K, 4)
+        boxes_5d = torch.cat([batch_idx, boxes_flat], dim=1)
 
-        # 1. State 5x5 ROIAlign extraction
-        roi_p2_state = roi_align(
-            p2_feat,
-            boxes_list,
-            output_size=self.state_roi_size,
-            spatial_scale=self.spatial_scale_p2,
-            aligned=True,
-        )
-        roi_p3_state = roi_align(
-            p3_feat,
-            boxes_list,
-            output_size=self.state_roi_size,
-            spatial_scale=self.spatial_scale_p3,
-            aligned=True,
-        )
-        flat_p2_state = roi_p2_state.flatten(1)  # [B*K, C_p2 * 25]
-        flat_p3_state = roi_p3_state.flatten(1)  # [B*K, C_p3 * 25]
-
-        # 2. Auxiliary 3x3 ROIAlign extraction
-        roi_p2_aux = roi_align(
-            p2_feat,
-            boxes_list,
-            output_size=self.aux_roi_size,
-            spatial_scale=self.spatial_scale_p2,
-            aligned=True,
-        )
-        roi_p3_aux = roi_align(
-            p3_feat,
-            boxes_list,
-            output_size=self.aux_roi_size,
-            spatial_scale=self.spatial_scale_p3,
-            aligned=True,
-        )
-        flat_p2_aux = roi_p2_aux.flatten(1)  # [B*K, C_p2 * 9]
-        flat_p3_aux = roi_p3_aux.flatten(1)  # [B*K, C_p3 * 9]
-
-        # 3. Gating computations
+        # Gating computations
         if self.use_task_gating and self.raw_gate_state is not None:
             alpha_state = torch.sigmoid(self.raw_gate_state)
             alpha_round = torch.sigmoid(self.raw_gate_round)
@@ -317,13 +391,51 @@ class TaskSpecificGatedROIAlign(nn.Module):
                 0.5, device=p2_feat.device, dtype=p2_feat.dtype
             )
 
-        # 4. Gated feature concatenation & projections
-        # State: 5x5 grid
-        state_cat = torch.cat(
-            [flat_p2_state * (2.0 * alpha_state), flat_p3_state * (2.0 * (1.0 - alpha_state))],
-            dim=1,
+        # 1. State feature extraction
+        if self.scale_adaptive_state and self.scale_adaptive_extractor is not None:
+            state_tokens = self.scale_adaptive_extractor(
+                p2_feat, p3_feat, candidate_boxes_xyxy, img_shape=img_shape, alpha_p2=alpha_state
+            )
+        else:
+            roi_p2_state = roi_align(
+                p2_feat,
+                boxes_5d,
+                output_size=self.state_roi_size,
+                spatial_scale=self.spatial_scale_p2,
+                aligned=True,
+            )
+            roi_p3_state = roi_align(
+                p3_feat,
+                boxes_5d,
+                output_size=self.state_roi_size,
+                spatial_scale=self.spatial_scale_p3,
+                aligned=True,
+            )
+            flat_p2_state = roi_p2_state.flatten(1)
+            flat_p3_state = roi_p3_state.flatten(1)
+            state_cat = torch.cat(
+                [flat_p2_state * (2.0 * alpha_state), flat_p3_state * (2.0 * (1.0 - alpha_state))],
+                dim=1,
+            )
+            state_tokens = self.fusion_state(state_cat).view(B, K, self.embed_dim)
+
+        # 2. Auxiliary 3x3 ROIAlign extraction
+        roi_p2_aux = roi_align(
+            p2_feat,
+            boxes_5d,
+            output_size=self.aux_roi_size,
+            spatial_scale=self.spatial_scale_p2,
+            aligned=True,
         )
-        state_tokens = self.fusion_state(state_cat).view(B, K, self.embed_dim)
+        roi_p3_aux = roi_align(
+            p3_feat,
+            boxes_5d,
+            output_size=self.aux_roi_size,
+            spatial_scale=self.spatial_scale_p3,
+            aligned=True,
+        )
+        flat_p2_aux = roi_p2_aux.flatten(1)  # [B*K, C_p2 * 9]
+        flat_p3_aux = roi_p3_aux.flatten(1)  # [B*K, C_p3 * 9]
 
         # Roundness: 3x3 grid
         round_cat = torch.cat(
@@ -493,7 +605,7 @@ class CandidateMultiScaleROIAlignPipeline(nn.Module):
 
 
 class TaskSpecificROIAlignPipeline(nn.Module):
-    """Complete Task-Specific Gated Multi-Scale ROIAlign Pipeline (Ticket E41 Champion v2)."""
+    """Complete Task-Specific Gated Multi-Scale ROIAlign Pipeline (Ticket E41 Champion v2 & Ticket 03)."""
 
     def __init__(
         self,
@@ -507,6 +619,7 @@ class TaskSpecificROIAlignPipeline(nn.Module):
         num_states: int = 4,
         num_maneuvers: int = 3,
         use_task_gating: bool = True,
+        scale_adaptive_state: bool = False,
     ) -> None:
         super().__init__()
         self.extractor = TaskSpecificGatedROIAlign(
@@ -518,6 +631,7 @@ class TaskSpecificROIAlignPipeline(nn.Module):
             stride_p2=stride_p2,
             stride_p3=stride_p3,
             use_task_gating=use_task_gating,
+            scale_adaptive_state=scale_adaptive_state,
         )
         self.tower = TaskSpecificAttributeTower(
             embed_dim=embed_dim,

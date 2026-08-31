@@ -31,6 +31,12 @@ from ..model.unified import (
     set_cross_attention_enabled,
     set_relevance_perception_gradient_scale,
 )
+from .curriculum import (
+    CurriculumScheduleSpec,
+    DynamicCurriculumLossScheduler,
+    SUPPORTED_SCHEDULE_TYPES,
+    build_curriculum_loss_scheduler,
+)
 from .data import (
     BalancedEffectiveBatchSampler,
     CanonicalMultiTaskDataset,
@@ -119,6 +125,17 @@ def _validate_training_config(config: Mapping[str, Any]) -> None:
         end = float(phase.get("relevance_perception_gradient_scale_end", start))
         if not (0.0 <= start <= 1.0 and 0.0 <= end <= 1.0):
             raise ValueError("relevance perception gradient scales must be in [0, 1]")
+    curriculum = config.get("curriculum_loss_schedule") or config.get("loss_curriculum")
+    if curriculum and isinstance(curriculum, Mapping):
+        start_ep = float(curriculum.get("start_epoch", 0.0))
+        end_ep = float(curriculum.get("end_epoch", start_ep))
+        if start_ep < 0.0 or end_ep < start_ep:
+            raise ValueError(
+                f"curriculum schedule epochs must be non-negative with start <= end, got start={start_ep}, end={end_ep}"
+            )
+        stype = str(curriculum.get("schedule_type", "cosine")).lower()
+        if stype not in SUPPORTED_SCHEDULE_TYPES:
+            raise ValueError(f"unsupported curriculum schedule_type: {stype!r}")
 
 
 def apply_training_overrides(
@@ -514,12 +531,17 @@ def build_training_components(
     }
     if arch.get("geometry_attention", {}).get("enabled", False):
         geom_cfg = arch.get("geometry_attention", {})
+        bias_dim = int(geom_cfg.get("relative_bias_dim", 18))
+        include_vp = bool(geom_cfg.get("include_vanishing_point", bias_dim == 18))
         attach_geometry_aware_unified_relevance_head(
             wrapper,
             config=UnifiedHeadConfig(**head_kwargs),
             hidden_dim=int(geom_cfg.get("hidden_dim", 32)),
             p_drop=float(geom_cfg.get("p_drop", 0.0)),
             use_confidence_gating=bool(geom_cfg.get("use_confidence_gate", True)),
+            include_vanishing_point=include_vp,
+            vp_x=float(geom_cfg.get("vp_x", 0.5)),
+            vp_y=float(geom_cfg.get("vp_y", 0.5)),
         )
     else:
         attach_unified_relevance_head(
@@ -653,6 +675,7 @@ _RESUME_CONTRACT_KEYS = (
     "loss",
     "tal_assigner",
     "phases",
+    "curriculum_loss_schedule",
 )
 
 
@@ -832,6 +855,12 @@ def train_from_config(
         if unknown:
             raise ValueError(f"unknown training phases: {sorted(unknown)}")
     criterion = build_multitask_criterion(model, config)
+    steps_per_epoch_cfg = config.get("optimizer_steps_per_epoch") or (
+        len(loader) // sampler.accumulation_steps if len(loader) else 100
+    )
+    curriculum_scheduler = build_curriculum_loss_scheduler(
+        config, steps_per_epoch=steps_per_epoch_cfg
+    )
     amp_enabled = bool(config["amp"]) and resolved_device.type == "cuda"
     scaler = torch.amp.GradScaler(
         "cuda",
@@ -842,6 +871,12 @@ def train_from_config(
     if resume is not None:
         ema.load_state_dict(resume["ema"])
         scaler.load_state_dict(resume["scaler"])
+        if (
+            "curriculum_scheduler" in resume
+            and resume["curriculum_scheduler"] is not None
+            and curriculum_scheduler is not None
+        ):
+            curriculum_scheduler.load_state_dict(resume["curriculum_scheduler"])
 
     log_path = output / "metrics.jsonl"
     output.mkdir(parents=True, exist_ok=True)
@@ -960,6 +995,12 @@ def train_from_config(
                     set_context_gradient_scale(
                         wrapper, batch["relevance_arrow_context_scale"]
                     )
+                    if curriculum_scheduler is not None:
+                        curriculum_scheduler.apply_to_criterion(
+                            criterion,
+                            epoch=global_epoch,
+                            step=optimizer_steps,
+                        )
                     with torch.autocast(
                         device_type=resolved_device.type,
                         dtype=torch.float16,
@@ -1040,6 +1081,11 @@ def train_from_config(
                                 name: value / window_micro_steps
                                 for name, value in window_loss_components.items()
                             },
+                            "loss_weights": (
+                                curriculum_scheduler.get_weights_dict(global_epoch, optimizer_steps)
+                                if curriculum_scheduler is not None
+                                else {k: round(float(v), 6) for k, v in asdict(criterion.weights).items()}
+                            ),
                             "gradient_norm": (
                                 float(raw_grad_norm) if finite_gradient_norm else None
                             ),
@@ -1121,6 +1167,11 @@ def train_from_config(
                     "amp_overflow_count": amp_overflow_count,
                     "grad_clipped_count": grad_clipped_count,
                     "rng_state": _capture_rng_state(),
+                    "curriculum_scheduler": (
+                        curriculum_scheduler.state_dict()
+                        if curriculum_scheduler is not None
+                        else None
+                    ),
                     "config": config,
                 }
                 _atomic_checkpoint(output / "weights" / "last.pt", checkpoint)
@@ -1220,7 +1271,7 @@ def train_from_config(
                         f"      Val Loss: {v_loss['total']:.4f} (Det: {v_loss['detection']:.3f} | State: {v_loss['state']:.3f} | Rel: {v_loss['relevance']:.3f} | NWD: {v_loss['nwd']:.3f})"
                     )
                     print(
-                        f"      Detection: mAP50 = {det['map50']:.4f} | mAP50-95 = {det['map50_95']:.4f} | AP_small = {det['ap_small']:.4f} | AP_med = {det['ap_medium']:.4f}"
+                        f"      Detection: mAP50 = {det['map50']:.4f} | mAP50-95 = {det['map50_95']:.4f} | AP_sub8px = {det.get('ap_tl_sub8px', 0.0):.4f} | AP_small = {det['ap_small']:.4f} | AP_med = {det['ap_medium']:.4f}"
                     )
                     print(
                         f"      Relevance: AUPRC = {rel['auprc']:.4f} | F1 = {rel['f1']:.4f} | Prec = {rel['precision']:.4f} | Rec = {rel['recall']:.4f} | RelRedRec = {rel_red_score:.4f}"

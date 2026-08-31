@@ -83,13 +83,13 @@ class QueryConditionedArrowMatcher(nn.Module):
         ar_c = arrow_boxes[:, None, :, :2]   # [B, 1, K_Arrow, 2]
         delta_xy = ar_c - tl_c               # [B, K_TL, K_Arrow, 2]
 
-        tl_wh = traffic_boxes[:, :, None, 2:].clamp_min(1e-6)  # [B, K_TL, 1, 2]
-        ar_wh = arrow_boxes[:, None, :, 2:].clamp_min(1e-6)   # [B, 1, K_Arrow, 2]
+        tl_wh = traffic_boxes[:, :, None, 2:].clamp(1e-4, 10.0)  # [B, K_TL, 1, 2]
+        ar_wh = arrow_boxes[:, None, :, 2:].clamp(1e-4, 10.0)   # [B, 1, K_Arrow, 2]
         tl_wh_exp = tl_wh.expand(-1, -1, K_Arrow, -1)
         ar_wh_exp = ar_wh.expand(-1, K_TL, -1, -1)
 
-        log_area_tl = torch.log(tl_wh_exp[..., 0:1] * tl_wh_exp[..., 1:2] + 1e-7)
-        log_area_ar = torch.log(ar_wh_exp[..., 0:1] * ar_wh_exp[..., 1:2] + 1e-7)
+        log_area_tl = torch.log(tl_wh_exp[..., 0:1] * tl_wh_exp[..., 1:2] + 1e-6).clamp(-10.0, 10.0)
+        log_area_ar = torch.log(ar_wh_exp[..., 0:1] * ar_wh_exp[..., 1:2] + 1e-6).clamp(-10.0, 10.0)
 
         # 2. Arrow detection score
         ar_score_exp = arrow_scores[:, None, :, None].expand(-1, K_TL, -1, -1)  # [B, K_TL, K_Arrow, 1]
@@ -116,19 +116,24 @@ class QueryConditionedArrowMatcher(nn.Module):
 
         # Mask invalid arrows with large negative score safe for float16
         invalid_mask = (~arrow_valid)[:, None, :].expand(-1, K_TL, -1)
-        min_val = torch.finfo(scores.dtype).min
+        min_val = -1e4 if scores.dtype == torch.float16 else -1e9
         scores = scores.masked_fill(invalid_mask, min_val)
         return scores
 
 
 class QueryConditionedCrossAttention(nn.Module):
-    """Query-conditioned cross-attention where each TL query attends only to its Top-M arrows + Null Token."""
+    """Query-conditioned cross-attention where each TL query attends only to its Top-M arrows + Null Token.
+
+    Supports Dynamic Confidence Gating (Ticket 06) with configurable match_threshold and arrow_score_threshold.
+    """
 
     def __init__(
         self,
         dimension: int = 128,
         heads: int = 4,
         top_m: int = 8,
+        match_threshold: float = 0.0,
+        arrow_score_threshold: float = 0.05,
     ) -> None:
         super().__init__()
         if dimension <= 0 or heads <= 0 or dimension % heads:
@@ -137,6 +142,8 @@ class QueryConditionedCrossAttention(nn.Module):
         self.heads = int(heads)
         self.head_dimension = self.dimension // self.heads
         self.top_m = int(top_m)
+        self.match_threshold = float(match_threshold)
+        self.arrow_score_threshold = float(arrow_score_threshold)
 
         self.query = nn.Linear(dimension, dimension)
         self.key = nn.Linear(dimension, dimension)
@@ -182,9 +189,9 @@ class QueryConditionedCrossAttention(nn.Module):
         ar_center = arrow_boxes[:, :, :, :2]  # [B, K_TL, M, 2]
         delta = ar_center - tl_center         # [B, K_TL, M, 2]
 
-        tl_size = tl_boxes[:, :, None, 2:].clamp_min(1e-6)
-        ar_size = arrow_boxes[:, :, :, 2:].clamp_min(1e-6)
-        log_ratio = torch.log(tl_size / ar_size)  # [B, K_TL, M, 2]
+        tl_size = tl_boxes[:, :, None, 2:].clamp(1e-4, 10.0)
+        ar_size = arrow_boxes[:, :, :, 2:].clamp(1e-4, 10.0)
+        log_ratio = torch.log(tl_size / ar_size).clamp(-10.0, 10.0)  # [B, K_TL, M, 2]
 
         ego = arrow_ego_lane[:, :, :, None]  # [B, K_TL, M, 1]
 
@@ -211,11 +218,13 @@ class QueryConditionedCrossAttention(nn.Module):
         traffic_maneuver: torch.Tensor,
         arrow_maneuver: torch.Tensor,
         arrow_ego_lane: torch.Tensor,
+        arrow_scores: torch.Tensor | None = None,
         arrow_valid: torch.Tensor,
         retrieval_indices: torch.Tensor,
+        retrieval_scores: torch.Tensor | None = None,
         enabled: bool = True,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Execute cross-attention per query over Top-M retrieved arrows.
+        """Execute cross-attention per query over Top-M retrieved arrows with dynamic confidence gating.
 
         Args:
             traffic_tokens: [B, K_TL, D]
@@ -226,8 +235,11 @@ class QueryConditionedCrossAttention(nn.Module):
             traffic_maneuver: [B, K_TL, 3]
             arrow_maneuver: [B, K_Arrow, 3]
             arrow_ego_lane: [B, K_Arrow]
+            arrow_scores: [B, K_Arrow] detection confidences (optional)
             arrow_valid: [B, K_Arrow]
             retrieval_indices: [B, K_TL, M]
+            retrieval_scores: [B, K_TL, M] matching scores (optional)
+            enabled: whether residual attention gate is applied
         Returns:
             conditioned_tokens: [B, K_TL, D]
             attention_weights: [B, H, K_TL, M + 1]
@@ -259,6 +271,18 @@ class QueryConditionedCrossAttention(nn.Module):
         # Gather per-query arrow valid:
         arrow_valid_exp = arrow_valid.unsqueeze(1).expand(-1, K_TL, -1)
         selected_arrow_valid = torch.gather(arrow_valid_exp, 2, retrieval_indices)  # [B, K_TL, M]
+
+        # Dynamic Confidence Gating (Ticket 06)
+        if arrow_scores is not None:
+            arrow_scores_exp = arrow_scores.unsqueeze(1).expand(-1, K_TL, -1)
+            selected_arrow_scores = torch.gather(arrow_scores_exp, 2, retrieval_indices)
+            score_mask = selected_arrow_scores >= self.arrow_score_threshold
+            selected_arrow_valid = selected_arrow_valid & score_mask
+
+        if retrieval_scores is not None and self.match_threshold > 0.0:
+            match_probs = torch.sigmoid(retrieval_scores)
+            match_mask = match_probs >= self.match_threshold
+            selected_arrow_valid = selected_arrow_valid & match_mask
 
         # Append Null Token to keys/values: [B, K_TL, M + 1, D]
         null = self.null_token.expand(B, K_TL, 1, -1)
@@ -294,10 +318,11 @@ class QueryConditionedCrossAttention(nn.Module):
         full_bias = torch.cat((pair_bias, null_bias), dim=-1)  # [B, H, K_TL, M + 1]
         logits = logits + full_bias
 
-        # Mask invalid arrows
+        # Mask invalid arrows with FP16 safe constant (-1e4)
         null_valid = torch.ones((B, K_TL, 1), dtype=torch.bool, device=selected_arrow_valid.device)
         key_valid = torch.cat((selected_arrow_valid.bool(), null_valid), dim=-1).unsqueeze(1)  # [B, 1, K_TL, M + 1]
-        logits = logits.masked_fill(~key_valid, torch.finfo(logits.dtype).min)
+        mask_val = -1e4 if logits.dtype == torch.float16 else -1e9
+        logits = logits.masked_fill(~key_valid, mask_val)
 
         weights = logits.softmax(dim=-1)  # [B, H, K_TL, M + 1]
 
@@ -311,7 +336,7 @@ class QueryConditionedCrossAttention(nn.Module):
 
 
 class QueryConditionedUnifiedDetect(UnifiedTrafficControlDetect):
-    """Unified detector with Top-M Query-Conditioned Road Arrow Selection (Ticket E24)."""
+    """Unified detector with Top-M Query-Conditioned Road Arrow Selection (Ticket E24 / Ticket 06)."""
 
     def __init__(
         self,
@@ -319,9 +344,11 @@ class QueryConditionedUnifiedDetect(UnifiedTrafficControlDetect):
         *,
         config: UnifiedHeadConfig | None = None,
         top_m: int = 8,
+        match_threshold: float = 0.0,
     ) -> None:
         super().__init__(base, config=config)
         self.top_m = int(top_m)
+        self.match_threshold = float(match_threshold)
         self.arrow_matcher = QueryConditionedArrowMatcher(
             token_dim=self.head_config.token_dim,
             hidden_dim=64,
@@ -330,6 +357,8 @@ class QueryConditionedUnifiedDetect(UnifiedTrafficControlDetect):
             dimension=self.head_config.token_dim,
             heads=self.head_config.attention_heads,
             top_m=self.top_m,
+            match_threshold=self.match_threshold,
+            arrow_score_threshold=self.head_config.arrow_score_threshold,
         )
 
     def _build_tokens(
@@ -469,7 +498,7 @@ class QueryConditionedUnifiedDetect(UnifiedTrafficControlDetect):
         traffic_tokens = self.traffic_token_projection(traffic_source)
         arrow_tokens = self.arrow_token_projection(arrow_source)
 
-        # 1. E24 Query-Conditioned Top-M Matching & Retrieval
+        # 1. E24 / Ticket 06 Query-Conditioned Top-M Matching & Retrieval
         matching_scores = self.arrow_matcher(
             traffic_tokens=traffic_tokens,
             arrow_tokens=arrow_tokens,
@@ -484,7 +513,7 @@ class QueryConditionedUnifiedDetect(UnifiedTrafficControlDetect):
             M, dim=-1, largest=True, sorted=True
         )  # [B, K_TL, M]
 
-        # 2. Query-Conditioned Cross Attention
+        # 2. Query-Conditioned Cross Attention with Dynamic Gating
         conditioned, attention, geometry_bias = self.cross_attention(
             traffic_tokens,
             arrow_tokens,
@@ -494,8 +523,10 @@ class QueryConditionedUnifiedDetect(UnifiedTrafficControlDetect):
             traffic_maneuver=traffic_maneuver_source,
             arrow_maneuver=arrow_maneuver_source,
             arrow_ego_lane=arrow_ego_source,
+            arrow_scores=arrow_score_source,
             arrow_valid=arrow_valid,
             retrieval_indices=retrieval_indices,
+            retrieval_scores=retrieval_scores,
             enabled=self.attention_enabled,
         )
         local_conditioned = self.cross_attention.normalization(traffic_tokens)
@@ -537,6 +568,7 @@ def attach_query_conditioned_unified_relevance_head(
     *,
     config: UnifiedHeadConfig | None = None,
     top_m: int = 8,
+    match_threshold: float = 0.0,
 ) -> QueryConditionedUnifiedDetect:
     """Attach QueryConditionedUnifiedDetect in place of final Detect module."""
     base = model_wrapper.model.model[-1]
@@ -548,7 +580,7 @@ def attach_query_conditioned_unified_relevance_head(
         raise TypeError(f"expected Detect or UnifiedTrafficControlDetect, got {type(base).__name__}")
 
     unified = QueryConditionedUnifiedDetect(
-        base_detect, config=config, top_m=top_m
+        base_detect, config=config, top_m=top_m, match_threshold=match_threshold
     )
     model_wrapper.model.model[-1] = unified
     return unified

@@ -538,6 +538,12 @@ class TLRMultiTaskCriterion:
             teacher_supervised=bool(temp_cfg.get("teacher_supervised", True)),
         )
 
+    def set_weights(self, weights: MultiTaskLossWeights | Mapping[str, float]) -> None:
+        """Update active multi-task loss weights dynamically."""
+        if isinstance(weights, MultiTaskLossWeights):
+            self.weights = weights
+        else:
+            self.weights = MultiTaskLossWeights(**weights)
 
     def __call__(
         self,

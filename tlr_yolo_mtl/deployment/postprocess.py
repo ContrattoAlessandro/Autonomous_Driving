@@ -47,12 +47,18 @@ def compute_pairwise_iou(
 def compute_pairwise_nwd(
     boxes1: torch.Tensor,
     boxes2: torch.Tensor,
-    constant: float = 12.0,
+    constant: float | torch.Tensor = 12.0,
     eps: float = 1e-9,
 ) -> torch.Tensor:
     """Compute pairwise Normalized Wasserstein Distance (NWD) matrix in (0, 1]."""
-    if constant <= 0:
-        raise ValueError("NWD normalization constant must be positive")
+    if isinstance(constant, (int, float)):
+        if constant <= 0:
+            raise ValueError("NWD normalization constant must be positive")
+    elif isinstance(constant, torch.Tensor):
+        if (constant <= 0).any():
+            raise ValueError("NWD normalization constant tensor must contain strictly positive values")
+    else:
+        raise TypeError(f"constant must be a float or torch.Tensor, got {type(constant)}")
     if boxes1.ndim != 2 or boxes1.shape[1] != 4 or boxes2.ndim != 2 or boxes2.shape[1] != 4:
         raise ValueError("boxes1 and boxes2 must have shape [N, 4] and [M, 4]")
     if boxes1.numel() == 0 or boxes2.numel() == 0:
@@ -115,6 +121,7 @@ def size_adaptive_nms(
     boxes: torch.Tensor,
     scores: torch.Tensor,
     *,
+    classes: torch.Tensor | None = None,
     quality_scores: torch.Tensor | None = None,
     quality_alpha: float = 0.70,
     scale_conditioned: bool = False,
@@ -123,10 +130,17 @@ def size_adaptive_nms(
     iou_threshold: float = 0.7,
     nwd_threshold: float = 0.5,
     nwd_constant: float = 12.0,
+    nwd_constant_tl: float | None = None,
+    nwd_constant_arrow: float | None = None,
+    nwd_constant_by_class: Mapping[int, float] | Sequence[float] | None = None,
     area_threshold: float = 64.0,
+    area_threshold_tl: float | None = None,
+    area_threshold_arrow: float | None = None,
+    area_threshold_by_class: Mapping[int, float] | Sequence[float] | None = None,
 ) -> torch.Tensor:
     """Size-Adaptive NMS: Gaussian NWD for tiny boxes (< area_thresh), IoU for larger boxes.
-    
+
+    Supports class-decoupled NWD constants and area thresholds (e.g. C_TL=12.0, C_arrow=24.0).
     If quality_scores is provided, candidate ranking order is determined by the joint
     quality-aware score: s = scores^alpha * quality_scores^(1 - alpha) or continuous scale-conditioned scoring.
     """
@@ -145,40 +159,102 @@ def size_adaptive_nms(
     if is_cuda and num_boxes <= 500:
         boxes_work = boxes.cpu()
         scores_work = scores.cpu()
+        classes_work = classes.cpu() if classes is not None else None
         quality_work = quality_scores.cpu() if quality_scores is not None else None
     else:
         boxes_work = boxes
         scores_work = scores
+        classes_work = classes
         quality_work = quality_scores
 
     if quality_work is not None:
         if scale_conditioned:
             ranking_scores = compute_scale_conditioned_quality_scores(
-                scores_work,
+                scores,
                 quality_work,
-                boxes_work,
+                boxes,
                 alpha_min=alpha_min,
                 alpha_max=alpha_max,
             )
         elif quality_alpha < 1.0:
-            p = scores_work.clamp(1e-7, 1.0)
+            p = scores.clamp(1e-7, 1.0)
             q = quality_work.clamp(1e-7, 1.0)
             ranking_scores = p.pow(quality_alpha) * q.pow(1.0 - quality_alpha)
         else:
-            ranking_scores = scores_work
+            ranking_scores = scores
     else:
-        ranking_scores = scores_work
+        ranking_scores = scores
 
-    order = ranking_scores.sort(descending=True).indices
-    sorted_boxes = boxes_work[order]
+    pre_cap = 3000
+    if num_boxes > pre_cap:
+        topk_indices = ranking_scores.topk(pre_cap).indices
+        boxes_work = boxes[topk_indices].cpu()
+        ranking_scores = ranking_scores[topk_indices].cpu()
+        classes_work = classes[topk_indices].cpu() if classes is not None else None
+        num_boxes = pre_cap
+        order = ranking_scores.sort(descending=True).indices
+        sorted_boxes = boxes_work[order]
+        orig_indices = topk_indices[order]
+    else:
+        boxes_work = boxes.cpu() if is_cuda else boxes
+        ranking_scores = ranking_scores.cpu() if is_cuda else ranking_scores
+        classes_work = classes.cpu() if (classes is not None and is_cuda) else classes
+        order = ranking_scores.sort(descending=True).indices
+        sorted_boxes = boxes_work[order]
+        orig_indices = order
+
     areas = (sorted_boxes[:, 2] - sorted_boxes[:, 0]).clamp_min(0) * (
         sorted_boxes[:, 3] - sorted_boxes[:, 1]
     ).clamp_min(0)
-    is_tiny = areas < area_threshold
+
+    # Class-aware area threshold and NWD constant handling
+    if classes_work is not None:
+        sorted_classes = classes_work[order].long()
+        # Area threshold mapping
+        a_map: dict[int, float] = {}
+        if area_threshold_by_class is not None:
+            if isinstance(area_threshold_by_class, Mapping):
+                a_map = {int(k): float(v) for k, v in area_threshold_by_class.items()}
+            else:
+                a_map = {i: float(v) for i, v in enumerate(area_threshold_by_class)}
+        elif area_threshold_tl is not None or area_threshold_arrow is not None:
+            a_map[0] = float(area_threshold_tl if area_threshold_tl is not None else area_threshold)
+            a_map[1] = float(area_threshold_arrow if area_threshold_arrow is not None else 1024.0)
+
+        if a_map:
+            box_area_thresh = torch.full((num_boxes,), area_threshold, dtype=sorted_boxes.dtype, device=sorted_boxes.device)
+            for cls_k, val in a_map.items():
+                box_area_thresh[sorted_classes == cls_k] = val
+            is_tiny = areas < box_area_thresh
+        else:
+            is_tiny = areas < area_threshold
+
+        # NWD constant mapping
+        c_map: dict[int, float] = {}
+        if nwd_constant_by_class is not None:
+            if isinstance(nwd_constant_by_class, Mapping):
+                c_map = {int(k): float(v) for k, v in nwd_constant_by_class.items()}
+            else:
+                c_map = {i: float(v) for i, v in enumerate(nwd_constant_by_class)}
+        elif nwd_constant_tl is not None or nwd_constant_arrow is not None:
+            c_map[0] = float(nwd_constant_tl if nwd_constant_tl is not None else nwd_constant)
+            c_map[1] = float(nwd_constant_arrow if nwd_constant_arrow is not None else 24.0)
+
+        if c_map:
+            c_vec = torch.full((num_boxes,), nwd_constant, dtype=sorted_boxes.dtype, device=sorted_boxes.device)
+            for cls_k, val in c_map.items():
+                c_vec[sorted_classes == cls_k] = val
+            constant_matrix = torch.maximum(c_vec[:, None], c_vec[None, :])
+        else:
+            constant_matrix = nwd_constant
+    else:
+        is_tiny = areas < area_threshold
+        constant_matrix = nwd_constant
+
     both_tiny = is_tiny[:, None] & is_tiny[None, :]
 
     iou_matrix = compute_pairwise_iou(sorted_boxes, sorted_boxes)
-    nwd_matrix = compute_pairwise_nwd(sorted_boxes, sorted_boxes, constant=nwd_constant)
+    nwd_matrix = compute_pairwise_nwd(sorted_boxes, sorted_boxes, constant=constant_matrix)
 
     suppress_matrix = torch.where(
         both_tiny,
@@ -191,10 +267,16 @@ def size_adaptive_nms(
     for i in range(num_boxes):
         if suppressed[i]:
             continue
-        keep.append(order[i])
+        keep.append(orig_indices[i])
         suppressed |= suppress_matrix[i]
+    if not keep:
+        return torch.empty(0, dtype=torch.long, device=orig_device)
     result = torch.stack(keep)
-    return result.to(orig_device) if is_cuda and num_boxes <= 500 else result
+    return result.to(orig_device)
+
+
+# First-class alias for size-adaptive NWD NMS
+size_adaptive_nwd_nms = size_adaptive_nms
 
 
 def retained_nms_indices(
@@ -377,9 +459,17 @@ def _postprocess_unified_outputs(
     nms_type: str = "standard",
     nwd_threshold: float = 0.5,
     nwd_constant: float = 12.0,
+    nwd_constant_tl: float | None = None,
+    nwd_constant_arrow: float | None = None,
     nwd_area_threshold: float = 64.0,
+    nwd_area_threshold_tl: float | None = None,
+    nwd_area_threshold_arrow: float | None = None,
     quality_scores: torch.Tensor | None = None,
     quality_alpha: float = 0.70,
+    temperature_state: float = 1.0,
+    temperature_relevance: float = 1.0,
+    conformal_safety_gate: Any | None = None,
+    temporal_smoother: Any | None = None,
 ) -> dict[str, dict[str, torch.Tensor]]:
     (
         detection,
@@ -394,6 +484,12 @@ def _postprocess_unified_outputs(
         relevance,
         attention,
     ) = outputs
+
+    c_tl = float(nwd_constant_tl if nwd_constant_tl is not None else nwd_constant)
+    c_arrow = float(nwd_constant_arrow if nwd_constant_arrow is not None else 24.0)
+    a_tl = float(nwd_area_threshold_tl if nwd_area_threshold_tl is not None else nwd_area_threshold)
+    a_arrow = float(nwd_area_threshold_arrow if nwd_area_threshold_arrow is not None else 1024.0)
+
     traffic_lists, traffic_slot_lists = _retained_unified_candidates(
         detection,
         traffic_candidates.long(),
@@ -404,8 +500,8 @@ def _postprocess_unified_outputs(
         max_detections=max_traffic_lights,
         nms_type=nms_type,
         nwd_threshold=nwd_threshold,
-        nwd_constant=nwd_constant,
-        nwd_area_threshold=nwd_area_threshold,
+        nwd_constant=c_tl,
+        nwd_area_threshold=a_tl,
         quality_scores=quality_scores,
         quality_alpha=quality_alpha,
     )
@@ -419,8 +515,8 @@ def _postprocess_unified_outputs(
         max_detections=max_arrows,
         nms_type=nms_type,
         nwd_threshold=nwd_threshold,
-        nwd_constant=nwd_constant,
-        nwd_area_threshold=nwd_area_threshold,
+        nwd_constant=c_arrow,
+        nwd_area_threshold=a_arrow,
     )
     traffic_indices, traffic_valid = _pad_indices(traffic_lists)
     traffic_slots, _ = _pad_indices(traffic_slot_lists)
@@ -441,8 +537,12 @@ def _postprocess_unified_outputs(
     selected_relevance = relevance.gather(
         2, traffic_slots[:, None, :].expand(-1, 1, -1)
     )
+
+    scaled_states = selected_states / temperature_state if temperature_state != 1.0 else selected_states
+    scaled_relevance = selected_relevance / temperature_relevance if temperature_relevance != 1.0 else selected_relevance
+
     score_bundle = combine_detection_relevance_scores(
-        traffic_scores, selected_relevance
+        traffic_scores, scaled_relevance
     )
     selected_attention = attention.gather(
         2,
@@ -450,26 +550,54 @@ def _postprocess_unified_outputs(
             -1, attention.shape[1], -1, attention.shape[3]
         ),
     )
+
+    tl_dict: dict[str, torch.Tensor] = {
+        "boxes_xyxy": traffic_boxes,
+        "valid": traffic_valid,
+        "dense_indices": traffic_indices,
+        "candidate_slots": traffic_slots,
+        **score_bundle,
+        "relevance_logits": scaled_relevance,
+        "state_logits": scaled_states,
+        "state_probabilities": scaled_states.softmax(1),
+        "state_indices": scaled_states.argmax(1),
+        "round_logits": selected_rounds,
+        "round_probabilities": selected_rounds.sigmoid(),
+        "maneuver_logits": selected_tl_maneuvers,
+        "maneuver_probabilities": selected_tl_maneuvers.sigmoid(),
+        "maneuver_multihot": selected_tl_maneuvers.sigmoid().ge(0.5).long(),
+        "attention_weights": selected_attention,
+        "attention_arrow_dense_indices": arrow_candidates.long(),
+        "attention_arrow_valid": arrow_candidate_valid.bool(),
+    }
+
+    if temporal_smoother is not None:
+        if traffic_boxes.shape[0] == 1:
+            smoothed = temporal_smoother.update(
+                traffic_boxes[0],
+                traffic_scores[0],
+                tl_dict["state_probabilities"][0],
+                score_bundle["relevance_probabilities"][0],
+                valid_mask=traffic_valid[0],
+            )
+            tl_dict["state_probabilities"] = smoothed["state_probabilities"].unsqueeze(0)
+            tl_dict["state_indices"] = smoothed["state_indices"].unsqueeze(0)
+            tl_dict["relevance_probabilities"] = smoothed["relevance_probabilities"].unsqueeze(0)
+            tl_dict["joint_scores"] = smoothed["joint_scores"].unsqueeze(0)
+            tl_dict["detection_scores"] = smoothed["detection_scores"].unsqueeze(0)
+            tl_dict["track_ids"] = smoothed["track_ids"].unsqueeze(0)
+            tl_dict["flicker_suppressed"] = smoothed["flicker_suppressed"].unsqueeze(0)
+
+    if conformal_safety_gate is not None:
+        safety_eval = conformal_safety_gate.evaluate_safety_gate(
+            tl_dict["state_probabilities"],
+            score_bundle["relevance_probabilities"],
+            traffic_scores,
+        )
+        tl_dict.update(safety_eval)
+
     return {
-        "traffic_lights": {
-            "boxes_xyxy": traffic_boxes,
-            "valid": traffic_valid,
-            "dense_indices": traffic_indices,
-            "candidate_slots": traffic_slots,
-            **score_bundle,
-            "relevance_logits": selected_relevance,
-            "state_logits": selected_states,
-            "state_probabilities": selected_states.softmax(1),
-            "state_indices": selected_states.argmax(1),
-            "round_logits": selected_rounds,
-            "round_probabilities": selected_rounds.sigmoid(),
-            "maneuver_logits": selected_tl_maneuvers,
-            "maneuver_probabilities": selected_tl_maneuvers.sigmoid(),
-            "maneuver_multihot": selected_tl_maneuvers.sigmoid().ge(0.5).long(),
-            "attention_weights": selected_attention,
-            "attention_arrow_dense_indices": arrow_candidates.long(),
-            "attention_arrow_valid": arrow_candidate_valid.bool(),
-        },
+        "traffic_lights": tl_dict,
         "road_arrows": {
             "boxes_xyxy": arrow_boxes,
             "valid": arrow_valid,
@@ -496,9 +624,17 @@ def postprocess_multitask_outputs(
     nms_type: str = "standard",
     nwd_threshold: float = 0.5,
     nwd_constant: float = 12.0,
+    nwd_constant_tl: float | None = None,
+    nwd_constant_arrow: float | None = None,
     nwd_area_threshold: float = 64.0,
+    nwd_area_threshold_tl: float | None = None,
+    nwd_area_threshold_arrow: float | None = None,
     quality_scores: torch.Tensor | None = None,
     quality_alpha: float = 0.70,
+    temperature_state: float = 1.0,
+    temperature_relevance: float = 1.0,
+    conformal_safety_gate: Any | None = None,
+    temporal_smoother: Any | None = None,
 ) -> dict[str, dict[str, torch.Tensor]]:
     """Decode unified outputs; legacy six-tensor checkpoints remain readable."""
 
@@ -513,9 +649,17 @@ def postprocess_multitask_outputs(
             nms_type=nms_type,
             nwd_threshold=nwd_threshold,
             nwd_constant=nwd_constant,
+            nwd_constant_tl=nwd_constant_tl,
+            nwd_constant_arrow=nwd_constant_arrow,
             nwd_area_threshold=nwd_area_threshold,
+            nwd_area_threshold_tl=nwd_area_threshold_tl,
+            nwd_area_threshold_arrow=nwd_area_threshold_arrow,
             quality_scores=quality_scores,
             quality_alpha=quality_alpha,
+            temperature_state=temperature_state,
+            temperature_relevance=temperature_relevance,
+            conformal_safety_gate=conformal_safety_gate,
+            temporal_smoother=temporal_smoother,
         )
     if len(outputs) != 6:
         raise ValueError("full model must return 11 unified tensors")
@@ -601,3 +745,8 @@ def postprocess_multitask_outputs(
             **selected_directions,
         },
     }
+
+
+# Backward compatibility alias
+size_adaptive_nwd_nms = size_adaptive_nms
+

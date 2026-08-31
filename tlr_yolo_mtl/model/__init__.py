@@ -26,6 +26,7 @@ from .roialign_attributes import (
     CandidateAttributeTower,
     CandidateMultiScaleROIAlign,
     CandidateMultiScaleROIAlignPipeline,
+    ScaleAdaptiveROIAlign,
     TaskSpecificAttributeTower,
     TaskSpecificGatedROIAlign,
     TaskSpecificROIAlignPipeline,
@@ -38,6 +39,8 @@ from .geometry_attention import (
     attach_geometry_aware_unified_relevance_head,
 )
 from .neck import (
+    GradientDecoupledC2Relay,
+    GradientDecoupledC2RelayConfig,
     ScaleAwareFeatureRelay,
     ScaleAwareFeatureRelayV2,
     ScaleAwareRelayConfig,
@@ -89,6 +92,7 @@ __all__ = [
     "CandidateMultiScaleROIAlign",
     "CandidateAttributeTower",
     "CandidateMultiScaleROIAlignPipeline",
+    "ScaleAdaptiveROIAlign",
     "TaskSpecificGatedROIAlign",
     "TaskSpecificAttributeTower",
     "TaskSpecificROIAlignPipeline",
@@ -109,6 +113,8 @@ __all__ = [
     "ScaleAwareFeatureRelayV2",
     "ScaleAwareRelayConfig",
     "ScaleAwareRelayV2Config",
+    "GradientDecoupledC2Relay",
+    "GradientDecoupledC2RelayConfig",
     "register_neck_modules",
 ]
 

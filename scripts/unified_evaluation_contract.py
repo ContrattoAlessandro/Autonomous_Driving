@@ -130,12 +130,17 @@ def load_model_with_weights(
 
     if arch_cfg.get("geometry_attention", {}).get("enabled", False):
         geom_cfg = arch_cfg.get("geometry_attention", {})
+        bias_dim = int(geom_cfg.get("relative_bias_dim", 18))
+        include_vp = bool(geom_cfg.get("include_vanishing_point", bias_dim == 18))
         attach_geometry_aware_unified_relevance_head(
             wrapper,
             config=UnifiedHeadConfig(**head_kwargs),
             hidden_dim=int(geom_cfg.get("hidden_dim", 32)),
             p_drop=float(geom_cfg.get("p_drop", 0.0)),
             use_confidence_gating=bool(geom_cfg.get("use_confidence_gate", True)),
+            include_vanishing_point=include_vp,
+            vp_x=float(geom_cfg.get("vp_x", 0.5)),
+            vp_y=float(geom_cfg.get("vp_y", 0.5)),
         )
     else:
         attach_unified_relevance_head(wrapper, config=UnifiedHeadConfig(**head_kwargs))

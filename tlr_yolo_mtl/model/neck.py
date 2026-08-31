@@ -37,6 +37,7 @@ class ScaleAwareRelayConfig:
     p2_channels: int = 64
     hidden_ratio: float = 0.5
     residual_scale: float = 1.0
+    c2_stop_gradient: bool = True  # Ticket 01: stop-gradient on C2 to prevent backbone gradient conflict
 
 
 class ScaleAwareFeatureRelay(nn.Module):
@@ -45,9 +46,9 @@ class ScaleAwareFeatureRelay(nn.Module):
     Supports both programmatic initialization and Ultralytics YAML parsing.
     
     Calling conventions:
-    1. ScaleAwareFeatureRelay(c2_channels=64, p2_channels=64, gating_type='spatial_channel')
+    1. ScaleAwareFeatureRelay(c2_channels=64, p2_channels=64, gating_type='spatial_channel', c2_stop_gradient=True)
     2. ScaleAwareFeatureRelay(c2_channels, p2_channels, gating_type)
-    3. From YAML: [-1, 1, ScaleAwareFeatureRelay, [64, 64, spatial_channel]]
+    3. From YAML: [-1, 1, ScaleAwareFeatureRelay, [64, 64, spatial_channel, 0.5, 1.0, true]]
     """
 
     def __init__(
@@ -58,6 +59,7 @@ class ScaleAwareFeatureRelay(nn.Module):
         gating_type: str = "spatial_channel",
         hidden_ratio: float = 0.5,
         residual_scale: float = 1.0,
+        c2_stop_gradient: bool = True,
         **kwargs: Any,
     ) -> None:
         super().__init__()
@@ -68,6 +70,7 @@ class ScaleAwareFeatureRelay(nn.Module):
         parsed_gating = gating_type
         parsed_hidden = hidden_ratio
         parsed_scale = residual_scale
+        parsed_stop_grad = kwargs.get("c2_stop_gradient", kwargs.get("stop_gradient", c2_stop_gradient))
 
         if len(args) == 1:
             if isinstance(args[0], int):
@@ -75,23 +78,37 @@ class ScaleAwareFeatureRelay(nn.Module):
                 parsed_p2 = args[0]
             elif isinstance(args[0], str):
                 parsed_gating = args[0]
+            elif isinstance(args[0], bool):
+                parsed_stop_grad = args[0]
         elif len(args) >= 2:
             if isinstance(args[0], int):
                 parsed_c2 = args[0]
             if isinstance(args[1], int):
                 parsed_p2 = args[1]
-            if len(args) >= 3 and isinstance(args[2], str):
-                parsed_gating = args[2]
-            if len(args) >= 4 and isinstance(args[3], (int, float)):
-                parsed_hidden = float(args[3])
-            if len(args) >= 5 and isinstance(args[4], (int, float)):
-                parsed_scale = float(args[4])
+            if len(args) >= 3:
+                if isinstance(args[2], str):
+                    parsed_gating = args[2]
+                elif isinstance(args[2], bool):
+                    parsed_stop_grad = args[2]
+            if len(args) >= 4:
+                if isinstance(args[3], (int, float)) and not isinstance(args[3], bool):
+                    parsed_hidden = float(args[3])
+                elif isinstance(args[3], bool):
+                    parsed_stop_grad = args[3]
+            if len(args) >= 5:
+                if isinstance(args[4], (int, float)) and not isinstance(args[4], bool):
+                    parsed_scale = float(args[4])
+                elif isinstance(args[4], bool):
+                    parsed_stop_grad = args[4]
+            if len(args) >= 6 and isinstance(args[5], bool):
+                parsed_stop_grad = args[5]
 
         self.c2_channels = int(parsed_c2) if parsed_c2 is not None else 64
         self.p2_channels = int(parsed_p2) if parsed_p2 is not None else 64
         self.gating_type = str(parsed_gating)
         self.hidden_ratio = float(parsed_hidden)
         self.residual_scale = float(parsed_scale)
+        self.c2_stop_gradient = bool(parsed_stop_grad)
 
         valid_gatings = {"spatial_channel", "spatial_only", "channel_only", "direct_sum"}
         if self.gating_type not in valid_gatings:
@@ -182,6 +199,10 @@ class ScaleAwareFeatureRelay(nn.Module):
         else:
             raise ValueError("ScaleAwareFeatureRelay requires both C2 and P2 feature maps")
 
+        # Ticket 01: Enforce stop-gradient barrier on incoming C2 features if configured
+        if self.c2_stop_gradient:
+            c2 = c2.detach()
+
         # Ensure spatial alignment if needed
         if c2.shape[2:] != p2.shape[2:]:
             c2 = F.interpolate(c2, size=p2.shape[2:], mode="bilinear", align_corners=False)
@@ -215,6 +236,7 @@ class ScaleAwareRelayV2Config:
     hidden_ratio: float = 0.5
     residual_scale: float = 1.0
     saliency_kernel: int = 3
+    c2_stop_gradient: bool = True  # Ticket 01: stop-gradient on C2 to prevent backbone gradient conflict
 
 
 class ScaleAwareFeatureRelayV2(nn.Module):
@@ -243,6 +265,7 @@ class ScaleAwareFeatureRelayV2(nn.Module):
         hidden_ratio: float = 0.5,
         residual_scale: float = 1.0,
         saliency_kernel: int = 3,
+        c2_stop_gradient: bool = True,
         **kwargs: Any,
     ) -> None:
         super().__init__()
@@ -253,6 +276,8 @@ class ScaleAwareFeatureRelayV2(nn.Module):
         parsed_gating = gating_type
         parsed_hidden = hidden_ratio
         parsed_scale = residual_scale
+        parsed_saliency = saliency_kernel
+        parsed_stop_grad = kwargs.get("c2_stop_gradient", kwargs.get("stop_gradient", c2_stop_gradient))
 
         if len(args) == 1:
             if isinstance(args[0], int):
@@ -260,24 +285,43 @@ class ScaleAwareFeatureRelayV2(nn.Module):
                 parsed_p2 = args[0]
             elif isinstance(args[0], str):
                 parsed_gating = args[0]
+            elif isinstance(args[0], bool):
+                parsed_stop_grad = args[0]
         elif len(args) >= 2:
             if isinstance(args[0], int):
                 parsed_c2 = args[0]
             if isinstance(args[1], int):
                 parsed_p2 = args[1]
-            if len(args) >= 3 and isinstance(args[2], str):
-                parsed_gating = args[2]
-            if len(args) >= 4 and isinstance(args[3], (int, float)):
-                parsed_hidden = float(args[3])
-            if len(args) >= 5 and isinstance(args[4], (int, float)):
-                parsed_scale = float(args[4])
+            if len(args) >= 3:
+                if isinstance(args[2], str):
+                    parsed_gating = args[2]
+                elif isinstance(args[2], bool):
+                    parsed_stop_grad = args[2]
+            if len(args) >= 4:
+                if isinstance(args[3], (int, float)) and not isinstance(args[3], bool):
+                    parsed_hidden = float(args[3])
+                elif isinstance(args[3], bool):
+                    parsed_stop_grad = args[3]
+            if len(args) >= 5:
+                if isinstance(args[4], (int, float)) and not isinstance(args[4], bool):
+                    parsed_scale = float(args[4])
+                elif isinstance(args[4], bool):
+                    parsed_stop_grad = args[4]
+            if len(args) >= 6:
+                if isinstance(args[5], int) and not isinstance(args[5], bool):
+                    parsed_saliency = int(args[5])
+                elif isinstance(args[5], bool):
+                    parsed_stop_grad = args[5]
+            if len(args) >= 7 and isinstance(args[6], bool):
+                parsed_stop_grad = args[6]
 
         self.c2_channels = int(parsed_c2) if parsed_c2 is not None else 64
         self.p2_channels = int(parsed_p2) if parsed_p2 is not None else 64
         self.gating_type = str(parsed_gating)
         self.hidden_ratio = float(parsed_hidden)
         self.residual_scale = float(parsed_scale)
-        self.saliency_kernel = int(saliency_kernel)
+        self.saliency_kernel = int(parsed_saliency)
+        self.c2_stop_gradient = bool(parsed_stop_grad)
 
         valid_gatings = {"dual_gate", "spatial_channel", "direct_sum"}
         if self.gating_type not in valid_gatings:
@@ -359,6 +403,10 @@ class ScaleAwareFeatureRelayV2(nn.Module):
         else:
             raise ValueError("ScaleAwareFeatureRelayV2 requires both C2 and P2 feature maps")
 
+        # Ticket 01: Enforce stop-gradient barrier on incoming C2 features if configured
+        if self.c2_stop_gradient:
+            c2 = c2.detach()
+
         # Ensure spatial alignment if needed
         if c2.shape[2:] != p2.shape[2:]:
             c2 = F.interpolate(c2, size=p2.shape[2:], mode="bilinear", align_corners=False)
@@ -383,20 +431,67 @@ class ScaleAwareFeatureRelayV2(nn.Module):
         return p2_refined
 
 
+@dataclass(frozen=True, slots=True)
+class GradientDecoupledC2RelayConfig:
+    """Configuration for Gradient-Decoupled C2 Feature Relay (Ticket 01)."""
+    enabled: bool = True
+    gating_type: str = "spatial_channel"  # 'spatial_channel', 'spatial_only', 'channel_only', 'direct_sum'
+    c2_channels: int = 64
+    p2_channels: int = 64
+    hidden_ratio: float = 0.5
+    residual_scale: float = 1.0
+    c2_stop_gradient: bool = True
+
+
+class GradientDecoupledC2Relay(ScaleAwareFeatureRelay):
+    """Gradient-Decoupled C2 -> P2 Feature Relay for Raw Texture Recovery (Ticket 01).
+    
+    Scientific Motivation:
+    Ticket 01 addresses the gradient fighting and State Head collapse observed in Champion v4.
+    Direct backpropagation of P2 neck gradients into shallow backbone convolutions (C2) corrupts
+    early hierarchical representations needed for semantic feature abstraction.
+    
+    By enforcing a stop-gradient barrier (c2.detach()) on the incoming C2 features before projection
+    and spatial-channel gating, the P2 neck receives raw high-frequency texture and chromatic edge cues
+    while completely isolating C2 backbone filters from relay backpropagation.
+    """
+
+    def __init__(
+        self,
+        *args: Any,
+        c2_channels: int | None = None,
+        p2_channels: int | None = None,
+        gating_type: str = "spatial_channel",
+        hidden_ratio: float = 0.5,
+        residual_scale: float = 1.0,
+        c2_stop_gradient: bool = True,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(
+            *args,
+            c2_channels=c2_channels,
+            p2_channels=p2_channels,
+            gating_type=gating_type,
+            hidden_ratio=hidden_ratio,
+            residual_scale=residual_scale,
+            c2_stop_gradient=c2_stop_gradient,
+            **kwargs,
+        )
+
+
 def get_module_out_channels(mod: nn.Module) -> int:
-    """Helper to extract output channel dimension from any Ultralytics/PyTorch module."""
-    if hasattr(mod, "cv2") and hasattr(mod.cv2, "conv"):
-        return mod.cv2.conv.out_channels
+    """Safely infer the output channel dimension of a layer module."""
+    if hasattr(mod, "cv2") and hasattr(mod.cv2, "conv") and hasattr(mod.cv2.conv, "out_channels"):
+        return int(mod.cv2.conv.out_channels)
     if hasattr(mod, "conv") and hasattr(mod.conv, "out_channels"):
-        return mod.conv.out_channels
-    if hasattr(mod, "c2") and isinstance(mod.c2, int):
-        return mod.c2
+        return int(mod.conv.out_channels)
     if hasattr(mod, "out_channels") and isinstance(mod.out_channels, int):
-        return mod.out_channels
-    for m in reversed(list(mod.modules())):
-        if isinstance(m, nn.Conv2d):
-            return m.out_channels
-    return 64
+        return int(mod.out_channels)
+    if hasattr(mod, "in_channels") and isinstance(mod.in_channels, int):
+        return int(mod.in_channels)
+    if hasattr(mod, "c2") and isinstance(mod.c2, int):
+        return int(mod.c2)
+    return 128
 
 
 def register_neck_modules() -> None:
@@ -404,6 +499,7 @@ def register_neck_modules() -> None:
     import sys
     setattr(nn, "ScaleAwareFeatureRelay", ScaleAwareFeatureRelay)
     setattr(nn, "ScaleAwareFeatureRelayV2", ScaleAwareFeatureRelayV2)
+    setattr(nn, "GradientDecoupledC2Relay", GradientDecoupledC2Relay)
 
     try:
         import copy
@@ -412,19 +508,29 @@ def register_neck_modules() -> None:
 
         setattr(um, "ScaleAwareFeatureRelay", ScaleAwareFeatureRelay)
         setattr(um, "ScaleAwareFeatureRelayV2", ScaleAwareFeatureRelayV2)
+        setattr(um, "GradientDecoupledC2Relay", GradientDecoupledC2Relay)
         setattr(ut, "ScaleAwareFeatureRelay", ScaleAwareFeatureRelay)
         setattr(ut, "ScaleAwareFeatureRelayV2", ScaleAwareFeatureRelayV2)
+        setattr(ut, "GradientDecoupledC2Relay", GradientDecoupledC2Relay)
 
         if hasattr(ut, "parse_model") and not getattr(ut.parse_model, "_has_relay_patch", False):
             orig_parse = ut.parse_model
 
             def relay_patched_parse_model(d, ch, verbose=True):
-                # Inspect if any layer in backbone/head is ScaleAwareFeatureRelay or ScaleAwareFeatureRelayV2
+                # Inspect if any layer in backbone/head is ScaleAwareFeatureRelay, ScaleAwareFeatureRelayV2, or GradientDecoupledC2Relay
                 all_layers = d.get("backbone", []) + d.get("head", [])
                 relay_indices = {}
+                relay_names = {
+                    "ScaleAwareFeatureRelay",
+                    "ScaleAwareFeatureRelayV2",
+                    "GradientDecoupledC2Relay",
+                    ScaleAwareFeatureRelay,
+                    ScaleAwareFeatureRelayV2,
+                    GradientDecoupledC2Relay,
+                }
                 for idx, layer_spec in enumerate(all_layers):
                     mod_name = layer_spec[2]
-                    if mod_name in {"ScaleAwareFeatureRelay", "ScaleAwareFeatureRelayV2"} or mod_name in {ScaleAwareFeatureRelay, ScaleAwareFeatureRelayV2}:
+                    if mod_name in relay_names:
                         relay_indices[idx] = copy.deepcopy(layer_spec)
 
                 if not relay_indices:
@@ -442,7 +548,7 @@ def register_neck_modules() -> None:
 
                 seq_model, save_list = orig_parse(d_mod, ch, verbose)
 
-                # Now replace placeholder nn.Identity modules with actual ScaleAwareFeatureRelay modules
+                # Now replace placeholder nn.Identity modules with actual Relay modules
                 for idx, orig_spec in relay_indices.items():
                     f_spec = orig_spec[0]
                     args_spec = orig_spec[3] if len(orig_spec) > 3 else []
@@ -457,21 +563,30 @@ def register_neck_modules() -> None:
                         mod_p2 = seq_model[idx_p2]
 
                         c2_ch = get_module_out_channels(mod_c2)
-                        p2_ch = get_module_out_channels(mod_p2)
+                        
+                        # If mod_p2 is DySample without in_channels set, derive from its source layer
+                        if getattr(mod_p2, "in_channels", None) is None and idx_p2 > 0:
+                            p2_ch = get_module_out_channels(seq_model[idx_p2 - 1])
+                        else:
+                            p2_ch = get_module_out_channels(mod_p2)
                         resolved_f = [idx_c2, idx_p2]
                     else:
-                        c2_ch, p2_ch = 64, 64
+                        c2_ch, p2_ch = 128, 128
                         resolved_f = f_spec
 
                     is_v2 = (mod_type == "ScaleAwareFeatureRelayV2" or mod_type is ScaleAwareFeatureRelayV2)
+                    is_decoupled = (mod_type == "GradientDecoupledC2Relay" or mod_type is GradientDecoupledC2Relay)
                     gating = "dual_gate" if is_v2 else "spatial_channel"
                     hidden_r = 0.5
                     res_s = 1.0
+                    c2_stop_g = True
                     for a in args_spec:
                         if isinstance(a, str) and a in {"dual_gate", "spatial_channel", "spatial_only", "channel_only", "direct_sum"}:
                             gating = a
-                        elif isinstance(a, (int, float)) and a <= 1.0:
+                        elif isinstance(a, (int, float)) and not isinstance(a, bool) and a <= 1.0:
                             hidden_r = float(a)
+                        elif isinstance(a, bool):
+                            c2_stop_g = a
 
                     if is_v2:
                         actual_relay = ScaleAwareFeatureRelayV2(
@@ -480,8 +595,19 @@ def register_neck_modules() -> None:
                             gating_type=gating,
                             hidden_ratio=hidden_r,
                             residual_scale=res_s,
+                            c2_stop_gradient=c2_stop_g,
                         )
                         actual_relay.type = "tlr_yolo_mtl.model.neck.ScaleAwareFeatureRelayV2"
+                    elif is_decoupled:
+                        actual_relay = GradientDecoupledC2Relay(
+                            c2_channels=c2_ch,
+                            p2_channels=p2_ch,
+                            gating_type=gating,
+                            hidden_ratio=hidden_r,
+                            residual_scale=res_s,
+                            c2_stop_gradient=c2_stop_g,
+                        )
+                        actual_relay.type = "tlr_yolo_mtl.model.neck.GradientDecoupledC2Relay"
                     else:
                         actual_relay = ScaleAwareFeatureRelay(
                             c2_channels=c2_ch,
@@ -489,6 +615,7 @@ def register_neck_modules() -> None:
                             gating_type=gating,
                             hidden_ratio=hidden_r,
                             residual_scale=res_s,
+                            c2_stop_gradient=c2_stop_g,
                         )
                         actual_relay.type = "tlr_yolo_mtl.model.neck.ScaleAwareFeatureRelay"
 

@@ -80,14 +80,17 @@ architecture:
     top_m: 8
     hidden_dim: 64
 
-  # E42 Component: Geometry-Aware Cross-Attention with 14D Relative Spatial Bias & Confidence Gating
+  # E42 / Ticket 05 Component: Geometry-Aware Cross-Attention with 18D Vanishing Point Spatial Bias & Confidence Gating
   geometry_attention:
     enabled: true
     embed_dim: 128
     heads: 4
     hidden_dim: 64
     use_confidence_gate: true
-    relative_bias_dim: 14
+    relative_bias_dim: 18
+    include_vanishing_point: true
+    vp_x: 0.5
+    vp_y: 0.5
 
   # E43 Component: Counterfactual Hard-Negative Collation for Ego-Lane Relevance
   counterfactual_sampling:
@@ -101,16 +104,20 @@ architecture:
     enforce_round_fallback: false
 
 tal_assigner:
-  type: nwd_aware_tal        # Scale-adaptive NWD-aware TAL Assigner (E30 causally isolated)
+  type: scale_adaptive_nwd_tal # Scale-adaptive NWD-aware TAL Assigner with Decoupled Constants (Ticket 07)
   lambda_nwd: 0.5
   tiny_transition_area: 64.0
+  tiny_transition_area_tl: 64.0
+  tiny_transition_area_arrow: 1024.0
   nwd_constant: 12.0
+  nwd_constant_tl: 12.0
+  nwd_constant_arrow: 24.0
   mode: scale_adaptive
 
 source_quotas_per_effective_batch:
   DTLD: 32
 
-loss_weights:                # E46: Pareto optimal static loss weights
+loss_weights:                # E46: Pareto optimal initial loss weights
   detection: 1.0
   state: 0.75
   round: 0.5
@@ -121,6 +128,33 @@ loss_weights:                # E46: Pareto optimal static loss weights
   association: 0.0           # Contrastive/association loss formally rejected in E35
   contrastive: 0.0
 
+# Ticket 04 Component: Dynamic Curriculum Loss Scheduling (Cosine relaxation / amplification)
+curriculum_loss_schedule:
+  enabled: true
+  start_epoch: 20
+  end_epoch: 50
+  schedule_type: "cosine"
+  initial_weights:
+    detection: 1.0
+    state: 0.75
+    relevance: 1.0
+    round: 0.5
+    maneuver: 1.0
+    ego_lane: 0.0
+    nwd: 0.5
+    association: 0.0
+    contrastive: 0.0
+  target_weights:
+    detection: 0.70
+    state: 1.25
+    relevance: 1.50
+    round: 0.50
+    maneuver: 1.00
+    ego_lane: 0.00
+    nwd: 0.50
+    association: 0.00
+    contrastive: 0.00
+
 loss:
   state_loss_type: "class_balanced_focal_softmax"  # E44: Class-Balanced Focal Softmax
   class_balanced_beta: 0.9999
@@ -130,13 +164,19 @@ loss:
   ego_lane_focal_gamma: 2.0
   relevance_focal_gamma: 2.0
   nwd_constant: 12.0
+  nwd_constant_tl: 12.0
+  nwd_constant_arrow: 24.0
 
-# E45 Component: Size-Adaptive Gaussian NWD Post-Processing Policy
+# E45 & Ticket 07 Component: Size-Adaptive Decoupled Gaussian NWD Post-Processing Policy
 postprocessing:
   size_adaptive_nms: true
   nwd_area_threshold: 64.0
+  nwd_area_threshold_tl: 64.0
+  nwd_area_threshold_arrow: 1024.0
   nwd_tau: 0.50
   nwd_constant: 12.0
+  nwd_constant_tl: 12.0
+  nwd_constant_arrow: 24.0
   standard_iou_tau: 0.45
 
 # E37 Standardized Evaluation vs Deployment Protocol
@@ -146,6 +186,35 @@ evaluation_contract:
   deploy_iou_threshold: 0.45
   primary_dataset: "DTLD"
   validation_images: 5962
+
+# Ticket 08 Component: Conformal Temperature Scaling & Conformal Risk Control Tau95
+calibration:
+  enabled: true
+  temperature_state: 1.1842
+  temperature_relevance: 1.0625
+  conformal_alpha_state: 0.05
+  conformal_method: "lac"
+  safety_target_recalls: [0.90, 0.95, 0.975]
+  tau_nominal: 0.25
+  tau_safety_95: 0.3540
+  tau_safety_975: 0.2185
+  red_prob_threshold: 0.40
+
+# Ticket 09 Component: Multi-Frame Temporal Sliding Window Smoother & Asymmetric State Filter
+temporal_smoothing:
+  enabled: true
+  window_size: 3
+  weights: [0.20, 0.35, 0.45]
+  asymmetric_red: true
+  red_instant_threshold: 0.40
+  red_release_threshold: 0.55
+  nwd_match_threshold: 0.30
+  nwd_constant: 12.0
+  nwd_area_threshold: 64.0
+  max_age: 2
+  min_hits: 1
+
+
 
 phases:
   - name: joint_training_single_phase

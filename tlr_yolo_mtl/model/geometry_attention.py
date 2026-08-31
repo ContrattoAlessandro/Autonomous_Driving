@@ -41,12 +41,30 @@ from .unified import (
 
 
 class ExplicitRelativeGeometryEncoder(nn.Module):
-    """Encodes rich normalized relative geometry and spatial perspective features for TL-Arrow pairs."""
+    """Encodes rich normalized relative geometry and spatial perspective features for TL-Arrow pairs.
 
-    def __init__(self, ego_x: float = 0.5, p_drop: float = 0.0) -> None:
+    Supports 14D baseline relative descriptor and 18D Vanishing Point perspective descriptor
+    (Ticket 05) integrating [Delta x_vp, Delta y_vp, dist_horizon, theta_road].
+    """
+
+    def __init__(
+        self,
+        ego_x: float = 0.5,
+        vp_x: float = 0.5,
+        vp_y: float = 0.5,
+        include_vanishing_point: bool = True,
+        p_drop: float = 0.0,
+    ) -> None:
         super().__init__()
         self.ego_x = float(ego_x)
+        self.vp_x = float(vp_x)
+        self.vp_y = float(vp_y)
+        self.include_vanishing_point = bool(include_vanishing_point)
         self.p_drop = float(p_drop)
+
+    @property
+    def feature_dim(self) -> int:
+        return 18 if self.include_vanishing_point else 14
 
     def forward(
         self,
@@ -61,7 +79,7 @@ class ExplicitRelativeGeometryEncoder(nn.Module):
         tl_valid: torch.Tensor | None = None,
         arrow_valid: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        """Compute relative geometric feature tensor phi_ij in [B, K_TL, K_Arrow, 14].
+        """Compute relative geometric feature tensor phi_ij in [B, K_TL, K_Arrow, feature_dim].
 
         Args:
             tl_boxes: [B, K_TL, 4] normalized (cx, cy, w, h)
@@ -75,7 +93,7 @@ class ExplicitRelativeGeometryEncoder(nn.Module):
             tl_valid: [B, K_TL] bool
             arrow_valid: [B, K_Arrow] bool
         Returns:
-            geom_feats: [B, K_TL, K_Arrow, 14]
+            geom_feats: [B, K_TL, K_Arrow, 18] (or 14 if include_vanishing_point is False)
         """
         B, K_TL, _ = tl_boxes.shape
         K_Arrow = arrow_boxes.shape[1]
@@ -123,26 +141,37 @@ class ExplicitRelativeGeometryEncoder(nn.Module):
         s_tl_exp = tl_scores[:, :, None].expand(-1, -1, K_Arrow)
         s_ar_exp = arrow_scores[:, None, :].expand(-1, K_TL, -1)
 
-        # Assemble normalized feature descriptor phi_ij (14 dimensions)
-        phi = torch.stack(
-            (
-                delta_x.clamp(-1.0, 1.0),
-                delta_y.clamp(-1.0, 1.0),
-                norm_dx.clamp(-10.0, 10.0),
-                norm_dy.clamp(-10.0, 10.0),
-                log_w_ratio,
-                log_h_ratio,
-                log_area_ratio,
-                tl_y_exp.clamp(0.0, 1.0),
-                ar_y_exp.clamp(0.0, 1.0),
-                ego_dx_ar.clamp(-1.0, 1.0),
-                directional_affinity.clamp(0.0, 1.0),
-                tl_round[:, :, None].expand(-1, -1, K_Arrow).clamp(0.0, 1.0),
-                s_tl_exp.clamp(0.0, 1.0),
-                s_ar_exp.clamp(0.0, 1.0),
-            ),
-            dim=-1,
-        )  # [B, K_TL, K_Arrow, 14]
+        # Assemble normalized feature descriptor phi_ij (14 base dimensions)
+        feature_list = [
+            delta_x.clamp(-1.0, 1.0),
+            delta_y.clamp(-1.0, 1.0),
+            norm_dx.clamp(-10.0, 10.0),
+            norm_dy.clamp(-10.0, 10.0),
+            log_w_ratio,
+            log_h_ratio,
+            log_area_ratio,
+            tl_y_exp.clamp(0.0, 1.0),
+            ar_y_exp.clamp(0.0, 1.0),
+            ego_dx_ar.clamp(-1.0, 1.0),
+            directional_affinity.clamp(0.0, 1.0),
+            tl_round[:, :, None].expand(-1, -1, K_Arrow).clamp(0.0, 1.0),
+            s_tl_exp.clamp(0.0, 1.0),
+            s_ar_exp.clamp(0.0, 1.0),
+        ]
+
+        # 8. Vanishing Point Perspective Offsets & Corridor Ray Geometry (Ticket 05)
+        if self.include_vanishing_point:
+            # Lateral offset from vanishing point corridor axis [B, K_TL, K_Arrow]
+            tl_dx_vp = (tl_x - self.vp_x).expand(-1, -1, K_Arrow).clamp(-1.0, 1.0)
+            # Vertical offset relative to horizon line [B, K_TL, K_Arrow]
+            tl_dy_vp = (tl_y - self.vp_y).expand(-1, -1, K_Arrow).clamp(-1.0, 1.0)
+            # Distance from horizon line (elevation / depth surrogate) [B, K_TL, K_Arrow]
+            dist_horizon = (self.vp_y - tl_y).abs().expand(-1, -1, K_Arrow).clamp(0.0, 1.0)
+            # Perspective ray angle / road corridor bearing normalized by pi [B, K_TL, K_Arrow]
+            theta_road = (torch.atan2(tl_y - self.vp_y, tl_x - self.vp_x) / math.pi).expand(-1, -1, K_Arrow).clamp(-1.0, 1.0)
+            feature_list.extend([tl_dx_vp, tl_dy_vp, dist_horizon, theta_road])
+
+        phi = torch.stack(feature_list, dim=-1)
 
         # Apply Contextual Geometry Dropout if enabled during training
         if self.training and self.p_drop > 0.0:
@@ -155,10 +184,11 @@ class ExplicitRelativeGeometryEncoder(nn.Module):
 class GeometryAttentionBiasMLP(nn.Module):
     """Lightweight 2-layer MLP projecting relative geometric vectors to multi-head attention biases."""
 
-    def __init__(self, in_features: int = 14, hidden_dim: int = 32, heads: int = 4) -> None:
+    def __init__(self, in_features: int = 18, hidden_dim: int = 32, heads: int = 4) -> None:
         super().__init__()
+        self.in_features = int(in_features)
         self.network = nn.Sequential(
-            nn.Linear(in_features, hidden_dim),
+            nn.Linear(self.in_features, hidden_dim),
             nn.LayerNorm(hidden_dim),
             nn.SiLU(inplace=True),
             nn.Linear(hidden_dim, heads),
@@ -180,7 +210,7 @@ class GeometryAttentionBiasMLP(nn.Module):
 
 
 class GeometryAwareCrossAttention(nn.Module):
-    """Multi-Head Cross-Attention with Explicit Relative Spatial Bias (Ticket E42)."""
+    """Multi-Head Cross-Attention with Explicit Relative Spatial Bias (Ticket E42 / Ticket 05)."""
 
     def __init__(
         self,
@@ -189,6 +219,9 @@ class GeometryAwareCrossAttention(nn.Module):
         hidden_dim: int = 32,
         p_drop: float = 0.0,
         use_confidence_gating: bool = True,
+        include_vanishing_point: bool = True,
+        vp_x: float = 0.5,
+        vp_y: float = 0.5,
     ) -> None:
         super().__init__()
         if dimension <= 0 or heads <= 0 or dimension % heads:
@@ -203,8 +236,18 @@ class GeometryAwareCrossAttention(nn.Module):
         self.value = nn.Linear(dimension, dimension)
         self.output = nn.Linear(dimension, dimension)
 
-        self.geometry_encoder = ExplicitRelativeGeometryEncoder(ego_x=0.5, p_drop=p_drop)
-        self.geometry_mlp = GeometryAttentionBiasMLP(in_features=14, hidden_dim=hidden_dim, heads=heads)
+        self.geometry_encoder = ExplicitRelativeGeometryEncoder(
+            ego_x=0.5,
+            vp_x=vp_x,
+            vp_y=vp_y,
+            include_vanishing_point=include_vanishing_point,
+            p_drop=p_drop,
+        )
+        self.geometry_mlp = GeometryAttentionBiasMLP(
+            in_features=self.geometry_encoder.feature_dim,
+            hidden_dim=hidden_dim,
+            heads=heads,
+        )
 
         self.null_token = nn.Parameter(torch.zeros(1, 1, dimension))
         nn.init.normal_(self.null_token, std=0.02)
@@ -340,7 +383,7 @@ class GeometryAwareCrossAttention(nn.Module):
 
 
 class GeometryAwareUnifiedDetect(UnifiedTrafficControlDetect):
-    """Unified detector with Geometry-Aware Cross-Attention (Ticket E42)."""
+    """Unified detector with Geometry-Aware Cross-Attention (Ticket E42 / Ticket 05)."""
 
     def __init__(
         self,
@@ -350,6 +393,9 @@ class GeometryAwareUnifiedDetect(UnifiedTrafficControlDetect):
         hidden_dim: int = 32,
         p_drop: float = 0.0,
         use_confidence_gating: bool = True,
+        include_vanishing_point: bool = True,
+        vp_x: float = 0.5,
+        vp_y: float = 0.5,
     ) -> None:
         super().__init__(base, config=config)
         self.cross_attention = GeometryAwareCrossAttention(
@@ -358,6 +404,9 @@ class GeometryAwareUnifiedDetect(UnifiedTrafficControlDetect):
             hidden_dim=hidden_dim,
             p_drop=p_drop,
             use_confidence_gating=use_confidence_gating,
+            include_vanishing_point=include_vanishing_point,
+            vp_x=vp_x,
+            vp_y=vp_y,
         )
 
     def _build_tokens(
@@ -545,6 +594,9 @@ def attach_geometry_aware_unified_relevance_head(
     hidden_dim: int = 32,
     p_drop: float = 0.0,
     use_confidence_gating: bool = True,
+    include_vanishing_point: bool = True,
+    vp_x: float = 0.5,
+    vp_y: float = 0.5,
 ) -> GeometryAwareUnifiedDetect:
     """Attach GeometryAwareUnifiedDetect in place of final Detect module."""
     base = model_wrapper.model.model[-1]
@@ -561,6 +613,9 @@ def attach_geometry_aware_unified_relevance_head(
         hidden_dim=hidden_dim,
         p_drop=p_drop,
         use_confidence_gating=use_confidence_gating,
+        include_vanishing_point=include_vanishing_point,
+        vp_x=vp_x,
+        vp_y=vp_y,
     )
     model_wrapper.model.model[-1] = unified
     return unified

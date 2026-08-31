@@ -352,7 +352,7 @@ def assigned_class_balanced_state_loss(
             ce = ce * (1.0 - p_t).clamp_min(0.0).pow(gamma)
         return ce.mean(), count
 
-    elif mode in ("cb_balanced_softmax", "class_balanced_focal_softmax", "cb_focal_softmax", "composite", "cb_bs", "champion_v3"):
+    elif mode in ("class_balanced", "cb_balanced_softmax", "class_balanced_focal_softmax", "cb_focal_softmax", "composite", "cb_bs", "champion_v3"):
         weights = (
             class_weights.to(device=device, dtype=dtype)
             if class_weights is not None

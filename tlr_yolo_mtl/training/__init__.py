@@ -17,6 +17,11 @@ from .distillation import (
     MultiTeacherRelationDistillationLoss,
     StudentKDProjector,
 )
+from .curriculum import (
+    CurriculumScheduleSpec,
+    DynamicCurriculumLossScheduler,
+    build_curriculum_loss_scheduler,
+)
 from .losses import MultiTaskLossWeights, TLRMultiTaskCriterion
 from .refinement_loss import (
     RefinementLossWeights,
@@ -24,6 +29,7 @@ from .refinement_loss import (
 )
 from .tal import (
     NWDAwareTaskAlignedAssigner,
+    ScaleAdaptiveNWDAssigner,
     TaskAlignedAssigner,
     build_task_aligned_assigner,
     compute_nwd_similarity,
@@ -41,9 +47,13 @@ from .temporal_distillation import (
 __all__ = [
     "MultiTaskLossWeights",
     "TLRMultiTaskCriterion",
+    "CurriculumScheduleSpec",
+    "DynamicCurriculumLossScheduler",
+    "build_curriculum_loss_scheduler",
     "TLArrowContrastiveLoss",
     "TLArrowContrastiveProjector",
     "NWDAwareTaskAlignedAssigner",
+    "ScaleAdaptiveNWDAssigner",
     "TaskAlignedAssigner",
     "build_task_aligned_assigner",
     "compute_nwd_similarity",
